@@ -1,0 +1,8 @@
+# communication between controller and data plane
+p4runtime-shell
+
+# general purpose packet manipulation library
+scapy
+
+# monitor netlink in kernel space
+pyroute2
