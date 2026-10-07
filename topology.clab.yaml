@@ -1,0 +1,39 @@
+name: p4-basic-lab
+
+topology:
+  nodes:
+    r1:
+      kind: linux
+      image: p4lang/behavioral-model:latest
+      binds:
+        - basic_forwarding.json:/root/basic_forwarding.json
+      cmd: >
+        bash -c "sleep 1 &&
+        simple_switch_grpc
+        --log-console
+        --thrift-port 9090
+        --device-id 1
+        -i 1@eth1 -i 2@eth2
+        /root/basic_forwarding.json
+        --
+        --grpc-server-addr 0.0.0.0:9559"
+
+    h1:
+      kind: linux
+      image: alpine:latest
+      cmd: sleep infinity
+      exec:
+        - ip addr add 10.0.1.1/24 dev eth1
+        - ip route add 10.0.2.0/24 via 10.0.1.254
+
+    h2:
+      kind: linux
+      image: alpine:latest
+      cmd: sleep infinity
+      exec:
+        - ip addr add 10.0.2.1/24 dev eth1
+        - ip route add 10.0.1.0/24 via 10.0.2.254
+
+  links:
+    - endpoints: ["h1:eth1", "r1:eth1"]
+    - endpoints: ["h2:eth1", "r1:eth2"]
