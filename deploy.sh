@@ -16,6 +16,7 @@ docker exec clab-p4-basic-lab-h1 arp -s 10.0.1.254 00:00:00:00:00:fe
 docker exec clab-p4-basic-lab-h2 arp -s 10.0.2.254 00:00:00:00:00:fe
 
 echo "[4/4] starting control plane (Python)..."
+sleep 2
 source venv/bin/activate
 python3 controller.py
 
