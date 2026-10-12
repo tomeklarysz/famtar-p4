@@ -21,19 +21,30 @@ def main():
         print(f"[!] error setting up P4Runtime: {e}")
         sys.exit(1)
 
-    te_h2 = sh.TableEntry("MyIngress.ipv4_lpm")(action="MyIngress.ipv4_forward")
-    te_h2.match["hdr.ipv4.dstAddr"] = "10.0.2.1"
-    te_h2.action["dstMac"] = "aa:c1:ab:c0:7a:8c"
-    te_h2.action["egress_port"] = "2"
-    te_h2.insert()
+    te = sh.TableEntry("MyIngress.ipv4_lpm")(action="MyIngress.set_nhop")
+    te.match["hdr.ipv4.dstAddr"] = "10.0.1.0/24"
+    te.action["port"] = "1"
+    te.insert()
 
-    te_h1 = sh.TableEntry("MyIngress.ipv4_lpm")(action="MyIngress.ipv4_forward")
-    te_h1.match["hdr.ipv4.dstAddr"] = "10.0.1.1"
-    te_h1.action["dstMac"] = "aa:c1:ab:35:4c:aa"
-    te_h1.action["egress_port"] = "1"
-    te_h1.insert()
+    te = sh.TableEntry("MyIngress.ipv4_lpm")(action="MyIngress.set_nhop")
+    te.match["hdr.ipv4.dstAddr"] = "10.0.2.0/24"
+    te.action["port"] = "2"
+    te.insert()
+
+    te = sh.TableEntry("MyIngress.dmac_table")(action="MyIngress.set_dmac")
+    te.match["standard_metadata.egress_spec"] = "1"
+    te.action["dst_mac"] = "00:00:00:00:01:01"
+    te.action["src_mac"] = "00:00:00:00:00:fe"
+    te.insert()
+
+    te = sh.TableEntry("MyIngress.dmac_table")(action="MyIngress.set_dmac")
+    te.match["standard_metadata.egress_spec"] = "2"
+    te.action["dst_mac"] = "00:00:00:00:02:02"
+    te.action["src_mac"] = "00:00:00:00:00:fe"
+    te.insert()
 
     sh.teardown()
+
 
 if __name__ == "__main__":
     main()

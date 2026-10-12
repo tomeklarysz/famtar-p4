@@ -38,4 +38,9 @@ topology:
 
   links:
     - endpoints: ["h1:eth1", "r1:eth1"]
+      vars:
+        macs: ["00:00:00:00:01:01", "00:00:00:00:00:01"]
     - endpoints: ["h2:eth1", "r1:eth2"]
+      vars:
+        macs: ["00:00:00:00:02:02", "00:00:00:00:00:02"]
+      
