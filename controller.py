@@ -3,14 +3,17 @@ import socket
 from pyroute2 import NetNS
 import p4runtime_sh.shell as sh
 
+p4_lock = threading.Lock()
+
 class P4Router:
-    def __init__(self, name, grpc_addr, device_id, netns, port_map):
+    def __init__(self, name, grpc_addr, device_id, netns, port_map, client=None):
         self.name = name
         self.grpc_addr = grpc_addr
         self.device_id = device_id
         self.netns = netns
         self.port_map = port_map
         self.iface_map = {}
+        self.client = client
 
     def run(self):
         with NetNS(self.netns) as ipr:
@@ -26,6 +29,7 @@ class P4Router:
                 route_info = self.parse_route_msg(msg)
                 if route_info and route_info['p4_port']:
                     print(f"[{self.name}] Existing route: {route_info}", flush=True)
+                    self.update_p4_route(route_info["prefix"], route_info["p4_port"])
 
             # listen for route changes
             while True:
@@ -67,24 +71,28 @@ class P4Router:
         }
 
     def update_p4_route(self, prefix, p4_port):
-        te = sh.TableEntry("MyIngress.ipv4_lpm")(action="MyIngress.set_nhop")
-        te.match["hdr.ipv4.dstAddr"] = prefix
-        te.action["port"] = str(p4_port)
-        try:
-            te.insert()
-            print(f"[{self.name}] P4 route added: {prefix} -> port {p4_port}", flush=True)
-        except Exception:
-            te.modify()
-            print(f"[{self.name}] P4 route modified: {prefix} -> port {p4_port}", flush=True)
+        with p4_lock:
+            sh.client = self.client
+            te = sh.TableEntry("MyIngress.ipv4_lpm")(action="MyIngress.set_nhop")
+            te.match["hdr.ipv4.dstAddr"] = prefix
+            te.action["port"] = str(p4_port)
+            try:
+                te.insert()
+                print(f"[{self.name}] P4 route added: {prefix} -> port {p4_port}", flush=True)
+            except Exception:
+                te.modify()
+                print(f"[{self.name}] P4 route modified: {prefix} -> port {p4_port}", flush=True)
 
     def delete_p4_route(self, prefix):
-        te = sh.TableEntry("MyIngress.ipv4_lpm")
-        te.match["hdr.ipv4.dstAddr"] = prefix
-        try:
-            te.delete()
-            print(f"[{self.name}] P4 route deleted: {prefix}", flush=True)
-        except Exception as e:
-            print(f"[{self.name}] Error deleting P4 route {prefix}: {e}", flush=True)
+        with p4_lock:
+            sh.client = self.client
+            te = sh.TableEntry("MyIngress.ipv4_lpm")
+            te.match["hdr.ipv4.dstAddr"] = prefix
+            try:
+                te.delete()
+                print(f"[{self.name}] P4 route deleted: {prefix}", flush=True)
+            except Exception as e:
+                print(f"[{self.name}] Error deleting P4 route {prefix}: {e}", flush=True)
 
 ROUTERS = [
     {
@@ -114,6 +122,7 @@ P4INFO_PATH = "basic_forwarding.p4info.txtpb"
 BIN_PATH = "basic_forwarding.json"
 
 def main():
+    clients = {}
 
     # r1: eth1 (port 1) -> h1, eth2 (port 2) -> r2
     try:
@@ -123,6 +132,7 @@ def main():
             election_id=ELECTION_ID,
             config=sh.FwdPipeConfig(P4INFO_PATH, BIN_PATH),
         )
+        clients["r1"] = sh.client
 
         te = sh.TableEntry("MyIngress.ipv4_lpm")(action="MyIngress.set_nhop")
         te.match["hdr.ipv4.dstAddr"] = "10.0.1.0/24"
@@ -146,18 +156,19 @@ def main():
         te.action["src_mac"] = "00:00:00:00:00:fe"
         te.insert()
 
-        sh.teardown()
     except Exception as e:
         print(f"Error in P4Runtime for r1: {e}")
 
     # r2: eth1 (port 1) -> r1, eth2 (port 2) -> h2
     try:
-        sh.setup(
+        client_r2 = sh.P4RuntimeClient(
             device_id=ROUTERS[1]["device_id"],
             grpc_addr=ROUTERS[1]["grpc_addr"],
             election_id=ELECTION_ID,
-            config=sh.FwdPipeConfig(P4INFO_PATH, BIN_PATH),
         )
+        client_r2.set_fwd_pipe_config(P4INFO_PATH, BIN_PATH)
+        clients["r2"] = client_r2
+        sh.client = client_r2
 
         te = sh.TableEntry("MyIngress.ipv4_lpm")(action="MyIngress.set_nhop")
         te.match["hdr.ipv4.dstAddr"] = "10.0.1.0/24"
@@ -181,7 +192,6 @@ def main():
         te.action["src_mac"] = "00:00:00:00:00:fe"
         te.insert()
 
-        sh.teardown()
     except Exception as e:
         print(f"Error in P4Runtime for r2: {e}")
 
@@ -192,7 +202,8 @@ def main():
             grpc_addr=r["grpc_addr"],
             device_id=r["device_id"],
             netns=r["netns"],
-            port_map=r["port_map"]
+            port_map=r["port_map"],
+            client=clients[r["name"]]
         )
         t = threading.Thread(target=router.run, daemon=True)
         t.start()
