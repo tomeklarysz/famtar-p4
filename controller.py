@@ -14,9 +14,19 @@ class P4Router:
 
     def run(self):
         with NetNS(self.netns) as ipr:
+            ipr.bind()
+            print(f"[{self.name}] listening on {self.netns}", flush=True)
+
             # map ifindex -> port name
             for link in ipr.get_links():
                 self.iface_map[link["index"]] = link.get_attr("IFLA_IFNAME")
+
+            # sync existing routes
+            for msg in ipr.get_routes(family=socket.AF_INET, table=254):
+                route_info = self.parse_route_msg(msg)
+                if route_info and route_info['p4_port']:
+                    print(f"[{self.name}] Existing route: {route_info}", flush=True)
+
             # listen for route changes
             while True:
                 for msg in ipr.get():
@@ -28,14 +38,18 @@ class P4Router:
                     if not route_info:
                         continue
                     if event == "RTM_NEWROUTE":
+                        print(f"[{self.name}] New route added: {route_info}", flush=True)
                         # update p4 table entry
-                        pass
+                        self.update_p4_route(route_info["prefix"], route_info["p4_port"])
                     elif event == "RTM_DELROUTE":
+                        print(f"[{self.name}] Route removed: {route_info}", flush=True)
                         # remove p4 table entry
-                        pass
+                        self.delete_p4_route(route_info["prefix"])
 
     def parse_route_msg(self, msg):
         if msg.get('family') != socket.AF_INET:
+            return None
+        if msg.get('table') != 254:  # main routing table
             return None
         dst_len = msg.get('dst_len')
         dst_ip = msg.get_attr('RTA_DST')
@@ -52,9 +66,25 @@ class P4Router:
             "gateway": gateway
         }
 
-ELECTION_ID = (0, 1)
-P4INFO_PATH = "basic_forwarding.p4info.txtpb"
-BIN_PATH = "basic_forwarding.json"
+    def update_p4_route(self, prefix, p4_port):
+        te = sh.TableEntry("MyIngress.ipv4_lpm")(action="MyIngress.set_nhop")
+        te.match["hdr.ipv4.dstAddr"] = prefix
+        te.action["port"] = str(p4_port)
+        try:
+            te.insert()
+            print(f"[{self.name}] P4 route added: {prefix} -> port {p4_port}", flush=True)
+        except Exception:
+            te.modify()
+            print(f"[{self.name}] P4 route modified: {prefix} -> port {p4_port}", flush=True)
+
+    def delete_p4_route(self, prefix):
+        te = sh.TableEntry("MyIngress.ipv4_lpm")
+        te.match["hdr.ipv4.dstAddr"] = prefix
+        try:
+            te.delete()
+            print(f"[{self.name}] P4 route deleted: {prefix}", flush=True)
+        except Exception as e:
+            print(f"[{self.name}] Error deleting P4 route {prefix}: {e}", flush=True)
 
 ROUTERS = [
     {
@@ -79,7 +109,9 @@ ROUTERS = [
     },
 ]
 
-
+ELECTION_ID = (0, 1)
+P4INFO_PATH = "basic_forwarding.p4info.txtpb"
+BIN_PATH = "basic_forwarding.json"
 
 def main():
 
