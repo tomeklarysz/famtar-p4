@@ -41,7 +41,7 @@ topology:
       image: alpine:latest
       cmd: sleep infinity
       exec:
-        - ip link set dev eth1 address aa:c1:ab:35:4c:aa
+        - ip link set dev eth1 address 00:00:00:00:01:01
         - ip addr add 10.0.1.1/24 dev eth1
         - ip route add 10.0.2.0/24 via 10.0.1.254
 
@@ -50,7 +50,7 @@ topology:
       image: alpine:latest
       cmd: sleep infinity
       exec:
-        - ip link set dev eth1 address aa:c1:ab:c0:7a:8c
+        - ip link set dev eth1 address 00:00:00:00:02:02
         - ip addr add 10.0.2.1/24 dev eth1
         - ip route add 10.0.1.0/24 via 10.0.2.254
 
