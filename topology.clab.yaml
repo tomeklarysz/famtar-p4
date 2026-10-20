@@ -14,10 +14,19 @@ topology:
         --log-console
         --thrift-port 9090
         --device-id 1
-        -i 1@eth1 -i 2@eth2
+        -i 1@eth1 -i 2@eth2 -i 3@eth3
         /root/basic_forwarding.json
         --
         --grpc-server-addr 0.0.0.0:9559"
+
+    r1-frr:
+      kind: linux
+      image: frrouting/frr:latest
+      network-mode: container:r1
+      binds:
+        - configs/daemons:/etc/frr/daemons
+        - configs/vtysh.conf:/etc/frr/vtysh.conf
+        - configs/r1/frr.conf:/etc/frr/frr.conf
 
     r2:
       kind: linux
@@ -36,6 +45,67 @@ topology:
         --
         --grpc-server-addr 0.0.0.0:9559"
 
+    r2-frr:
+      kind: linux
+      image: frrouting/frr:latest
+      network-mode: container:r2
+      binds:
+        - configs/daemons:/etc/frr/daemons
+        - configs/vtysh.conf:/etc/frr/vtysh.conf
+        - configs/r2/frr.conf:/etc/frr/frr.conf
+
+    r3:
+      kind: linux
+      image: p4lang/behavioral-model:latest
+      mgmt-ipv4: 172.20.20.6
+      binds:
+        - basic_forwarding.json:/root/basic_forwarding.json
+      cmd: >
+        bash -c "sleep 1 &&
+        simple_switch_grpc
+        --log-console
+        --thrift-port 9092
+        --device-id 3
+        -i 1@eth1 -i 2@eth2
+        /root/basic_forwarding.json
+        --
+        --grpc-server-addr 0.0.0.0:9559"
+
+    r3-frr:
+      kind: linux
+      image: frrouting/frr:latest
+      network-mode: container:r3
+      binds:
+        - configs/daemons:/etc/frr/daemons
+        - configs/vtysh.conf:/etc/frr/vtysh.conf
+        - configs/r3/frr.conf:/etc/frr/frr.conf
+
+    r4:
+      kind: linux
+      image: p4lang/behavioral-model:latest
+      mgmt-ipv4: 172.20.20.7
+      binds:
+        - basic_forwarding.json:/root/basic_forwarding.json
+      cmd: >
+        bash -c "sleep 1 &&
+        simple_switch_grpc
+        --log-console
+        --thrift-port 9093
+        --device-id 4
+        -i 1@eth1 -i 2@eth2 -i 3@eth3
+        /root/basic_forwarding.json
+        --
+        --grpc-server-addr 0.0.0.0:9559"
+
+    r4-frr:
+      kind: linux
+      image: frrouting/frr:latest
+      network-mode: container:r4
+      binds:
+        - configs/daemons:/etc/frr/daemons
+        - configs/vtysh.conf:/etc/frr/vtysh.conf
+        - configs/r4/frr.conf:/etc/frr/frr.conf
+
     h1:
       kind: linux
       image: alpine:latest
@@ -43,7 +113,7 @@ topology:
       exec:
         - ip link set dev eth1 address 00:00:00:00:01:01
         - ip addr add 10.0.1.1/24 dev eth1
-        - ip route add 10.0.2.0/24 via 10.0.1.254
+        - ip route add 10.0.0.0/8 via 10.0.1.254
 
     h2:
       kind: linux
@@ -52,7 +122,7 @@ topology:
       exec:
         - ip link set dev eth1 address 00:00:00:00:02:02
         - ip addr add 10.0.2.1/24 dev eth1
-        - ip route add 10.0.1.0/24 via 10.0.2.254
+        - ip route add 10.0.0.0/8 via 10.0.2.254
 
   links:
     - endpoints: ["h1:eth1", "r1:eth1"]
@@ -60,8 +130,16 @@ topology:
         macs: ["00:00:00:00:01:01", "00:00:00:00:00:01"]
     - endpoints: ["r1:eth2", "r2:eth1"]
       vars:
-        macs: ["00:00:00:00:00:02", "00:00:00:00:00:03"]
-    - endpoints: ["r2:eth2", "h2:eth1"]
+        macs: ["00:00:00:00:00:12", "00:00:00:00:00:21"]
+    - endpoints: ["r1:eth3", "r3:eth1"]
+      vars:
+        macs: ["00:00:00:00:00:13", "00:00:00:00:00:31"]
+    - endpoints: ["r2:eth2", "r4:eth2"]
+      vars:
+        macs: ["00:00:00:00:00:24", "00:00:00:00:00:42"]
+    - endpoints: ["r3:eth2", "r4:eth3"]
+      vars:
+        macs: ["00:00:00:00:00:34", "00:00:00:00:00:43"]
+    - endpoints: ["r4:eth1", "h2:eth1"]
       vars:
         macs: ["00:00:00:00:00:04", "00:00:00:00:02:02"]
-      
