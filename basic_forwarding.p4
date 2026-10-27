@@ -8,6 +8,17 @@ const bit<8>  PROTO_UDP = 17;
 const bit<32> FFT_SIZE       = 65536;
 const bit<48> FFT_TIMEOUT_US = 30000000;
 
+const bit<48> CONG_WINDOW_US        = 200000;   // 200 ms
+const bit<64> LINK_CAPACITY_BYTES_S = 1250000;  // 10 Mbit/s = 1 250 000 B/s
+const bit<64> WINDOW_CAPACITY_BYTES = (LINK_CAPACITY_BYTES_S * (bit<64>)CONG_WINDOW_US) / 1000000; // 250 000 B
+const bit<64> BYTES_TH_MAX          = (WINDOW_CAPACITY_BYTES * 80) / 100; // 80% (200 000 B)
+const bit<64> BYTES_TH_MIN          = (WINDOW_CAPACITY_BYTES * 30) / 100; // 30% (75 000 B)
+
+struct congestion_digest_t {
+    bit<9> port;
+    bit<8> status;
+}
+
 header ethernet_t {
     bit<48> dstAddr;
     bit<48> srcAddr;
@@ -119,6 +130,10 @@ control MyIngress(inout headers hdr,
     register<bit<8>>(FFT_SIZE)  reg_saved_ttl;
     register<bit<48>>(FFT_SIZE) reg_timestamp;
 
+    register<bit<64>>(16) reg_port_bytes;
+    register<bit<48>>(16) reg_port_last_ts;
+    register<bit<1>>(16)  reg_port_congested;
+
     action drop() {
         mark_to_drop(standard_metadata);
     }
@@ -130,6 +145,23 @@ control MyIngress(inout headers hdr,
     action set_dmac(bit<48> dst_mac, bit<48> src_mac) {
         hdr.ethernet.dstAddr = dst_mac;
         hdr.ethernet.srcAddr = src_mac;
+    }
+
+    action check_silent_port(in bit<32> port_id, inout bool digest_sent) {
+        if (!digest_sent && standard_metadata.egress_spec != (bit<9>)port_id) {
+            bit<48> last_ts;
+            bit<1>  is_cong;
+            reg_port_last_ts.read(last_ts, port_id);
+            reg_port_congested.read(is_cong, port_id);
+            bit<48> now = standard_metadata.ingress_global_timestamp;
+            if (is_cong == 1 && (now - last_ts) > (CONG_WINDOW_US * 2)) {
+                reg_port_congested.write(port_id, 0);
+                reg_port_bytes.write(port_id, 0);
+                reg_port_last_ts.write(port_id, now);
+                digest<congestion_digest_t>(1, { (bit<9>)port_id, 0 });
+                digest_sent = true;
+            }
+        }
     }
 
     table ipv4_lpm {
@@ -164,7 +196,7 @@ control MyIngress(inout headers hdr,
             return;
         }
 
-        if (hdr.ipv4.ttl == 0) {
+        if (hdr.ipv4.ttl <= 1) {
             drop();
             return;
         }
@@ -234,11 +266,12 @@ control MyIngress(inout headers hdr,
             }
         }
 
+        bool lpm_hit = false;
         if (meta.fft_hit == 0) {
-            ipv4_lpm.apply();
+            lpm_hit = ipv4_lpm.apply().hit;
         }
 
-        if (meta.cache_fft == 1) {
+        if (meta.cache_fft == 1 && lpm_hit && standard_metadata.egress_spec != 511) {
             reg_signature.write((bit<32>)meta.fft_index,   meta.flow_signature);
             reg_egress_port.write((bit<32>)meta.fft_index, standard_metadata.egress_spec);
             reg_saved_ttl.write((bit<32>)meta.fft_index,   hdr.ipv4.ttl);
@@ -247,6 +280,51 @@ control MyIngress(inout headers hdr,
         }
 
         dmac_table.apply();
+
+        if (standard_metadata.egress_spec < 16) {
+            bit<32> port_idx = (bit<32>)standard_metadata.egress_spec;
+            bit<64> accumulated_bytes;
+            bit<48> last_ts;
+            bit<1>  current_congested;
+            bool    digest_sent = false;
+
+            reg_port_bytes.read(accumulated_bytes, port_idx);
+            reg_port_last_ts.read(last_ts, port_idx);
+            reg_port_congested.read(current_congested, port_idx);
+
+            bit<48> now = standard_metadata.ingress_global_timestamp;
+            bit<48> dt  = now - last_ts;
+
+            if (dt > (CONG_WINDOW_US * 2)) {
+                if (current_congested == 1) {
+                    reg_port_congested.write(port_idx, 0);
+                    digest<congestion_digest_t>(1, { standard_metadata.egress_spec, 0 });
+                    digest_sent = true;
+                }
+                reg_port_bytes.write(port_idx, (bit<64>)standard_metadata.packet_length);
+                reg_port_last_ts.write(port_idx, now);
+            } else if (dt > CONG_WINDOW_US) {
+                accumulated_bytes = accumulated_bytes + (bit<64>)standard_metadata.packet_length;
+                if (accumulated_bytes > BYTES_TH_MAX && current_congested == 0) {
+                    reg_port_congested.write(port_idx, 1);
+                    digest<congestion_digest_t>(1, { standard_metadata.egress_spec, 1 });
+                    digest_sent = true;
+                } else if (accumulated_bytes < BYTES_TH_MIN && current_congested == 1) {
+                    reg_port_congested.write(port_idx, 0);
+                    digest<congestion_digest_t>(1, { standard_metadata.egress_spec, 0 });
+                    digest_sent = true;
+                }
+                reg_port_bytes.write(port_idx, 0);
+                reg_port_last_ts.write(port_idx, now);
+            } else {
+                accumulated_bytes = accumulated_bytes + (bit<64>)standard_metadata.packet_length;
+                reg_port_bytes.write(port_idx, accumulated_bytes);
+            }
+
+            check_silent_port(1, digest_sent);
+            check_silent_port(2, digest_sent);
+            check_silent_port(3, digest_sent);
+        }
 
         hdr.ipv4.ttl = hdr.ipv4.ttl - 1;
     }
