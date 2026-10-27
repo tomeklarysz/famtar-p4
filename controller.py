@@ -30,6 +30,7 @@ class P4Router:
                     grpc_addr=self.grpc_addr,
                     election_id=ELECTION_ID,
                     config=sh.FwdPipeConfig(P4INFO_PATH, BIN_PATH),
+                    verbose=False,
                 )
                 self.client = sh.client
             else:
@@ -41,6 +42,7 @@ class P4Router:
                 self.client.set_fwd_pipe_config(P4INFO_PATH, BIN_PATH)
 
             sh.client = self.client
+            sh.global_options["verbose"] = False
 
             for port, (dst_mac, src_mac) in self.dmac.items():
                 te = sh.TableEntry("MyIngress.dmac_table")(action="MyIngress.set_dmac")
@@ -162,6 +164,9 @@ class P4Router:
                 ifname = self.ifname_from_port(port)
                 if not ifname:
                     print(f"[{self.name}] Digest for unmapped port {port} (status={status})", flush=True)
+                    continue
+                if ifname not in self.default_metrics:
+                    # ignore host interfaces - not transit
                     continue
                 if status == 1:
                     print(f"[{self.name}] CONGESTION DETECTED on port {port} ({ifname}) -> setting IS-IS metric to 1000", flush=True)

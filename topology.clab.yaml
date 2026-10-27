@@ -34,6 +34,7 @@ topology:
         - configs/r1/frr.conf:/etc/frr/frr.conf
       exec:
         - sysctl -qw net.ipv4.ip_forward=0 net.ipv6.conf.all.forwarding=0
+        - apk add --no-cache tcpdump
         - iptables -A OUTPUT -p icmp --icmp-type destination-unreachable -j DROP
         - tc qdisc replace dev eth2 root tbf rate 10mbit burst 64kb latency 50ms
         - tc qdisc replace dev eth3 root tbf rate 10mbit burst 64kb latency 50ms
@@ -70,6 +71,7 @@ topology:
         - configs/r2/frr.conf:/etc/frr/frr.conf
       exec:
         - sysctl -qw net.ipv4.ip_forward=0 net.ipv6.conf.all.forwarding=0
+        - apk add --no-cache tcpdump
         - iptables -A OUTPUT -p icmp --icmp-type destination-unreachable -j DROP
         - tc qdisc replace dev eth2 root tbf rate 10mbit burst 64kb latency 50ms
 
@@ -105,6 +107,7 @@ topology:
         - configs/r3/frr.conf:/etc/frr/frr.conf
       exec:
         - sysctl -qw net.ipv4.ip_forward=0 net.ipv6.conf.all.forwarding=0
+        - apk add --no-cache tcpdump
         - iptables -A OUTPUT -p icmp --icmp-type destination-unreachable -j DROP
         - tc qdisc replace dev eth2 root tbf rate 10mbit burst 64kb latency 50ms
 
@@ -140,6 +143,7 @@ topology:
         - configs/r4/frr.conf:/etc/frr/frr.conf
       exec:
         - sysctl -qw net.ipv4.ip_forward=0 net.ipv6.conf.all.forwarding=0
+        - apk add --no-cache tcpdump
         - iptables -A OUTPUT -p icmp --icmp-type destination-unreachable -j DROP
 
     h1:
@@ -162,7 +166,8 @@ topology:
         - ip route add 10.0.0.0/8 via 10.0.2.254
         - arp -s 10.0.2.254 00:00:00:00:00:04
         - apk add --no-cache iperf3
-        - iperf3 -s -D
+        - iperf3 -s -p 5201 -D
+        - iperf3 -s -p 5202 -D
 
   links:
     - type: veth
