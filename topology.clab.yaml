@@ -35,8 +35,8 @@ topology:
       exec:
         - sysctl -qw net.ipv4.ip_forward=0 net.ipv6.conf.all.forwarding=0
         - iptables -A OUTPUT -p icmp --icmp-type destination-unreachable -j DROP
-        - tc qdisc replace dev eth2 root tbf rate 10mbit burst 32kbit latency 50ms
-        - tc qdisc replace dev eth3 root tbf rate 10mbit burst 32kbit latency 50ms
+        - tc qdisc replace dev eth2 root tbf rate 10mbit burst 64kb latency 50ms
+        - tc qdisc replace dev eth3 root tbf rate 10mbit burst 64kb latency 50ms
 
     r2:
       kind: linux
@@ -71,7 +71,7 @@ topology:
       exec:
         - sysctl -qw net.ipv4.ip_forward=0 net.ipv6.conf.all.forwarding=0
         - iptables -A OUTPUT -p icmp --icmp-type destination-unreachable -j DROP
-        - tc qdisc replace dev eth2 root tbf rate 10mbit burst 32kbit latency 50ms
+        - tc qdisc replace dev eth2 root tbf rate 10mbit burst 64kb latency 50ms
 
     r3:
       kind: linux
@@ -106,7 +106,7 @@ topology:
       exec:
         - sysctl -qw net.ipv4.ip_forward=0 net.ipv6.conf.all.forwarding=0
         - iptables -A OUTPUT -p icmp --icmp-type destination-unreachable -j DROP
-        - tc qdisc replace dev eth2 root tbf rate 10mbit burst 32kbit latency 50ms
+        - tc qdisc replace dev eth2 root tbf rate 10mbit burst 64kb latency 50ms
 
     r4:
       kind: linux
