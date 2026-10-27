@@ -150,6 +150,8 @@ topology:
         - ip addr add 10.0.1.1/24 dev eth1
         - ip route add 10.0.0.0/8 via 10.0.1.254
         - arp -s 10.0.1.254 00:00:00:00:00:01
+        - apk add --no-cache iperf3
+        - iperf3 -s -D
 
     h2:
       kind: linux
@@ -159,6 +161,8 @@ topology:
         - ip addr add 10.0.2.1/24 dev eth1
         - ip route add 10.0.0.0/8 via 10.0.2.254
         - arp -s 10.0.2.254 00:00:00:00:00:04
+        - apk add --no-cache iperf3
+        - iperf3 -s -D
 
   links:
     - type: veth
