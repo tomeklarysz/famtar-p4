@@ -71,11 +71,10 @@ struct headers {
 struct metadata {
     bit<16> l4_src_port;
     bit<16> l4_dst_port;
-    bit<16> fft_index;
+    bit<32> fft_index;
     bit<32> flow_signature;
     bit<1>  fft_hit;
     bit<1>  cache_fft;
-    bit<32> next_hop_ip;
 }
 
 parser MyParser(packet_in packet,
@@ -221,13 +220,13 @@ control MyIngress(inout headers hdr,
         if (is_tcp_udp) {
             hash(meta.fft_index,
                  HashAlgorithm.crc16,
-                 (bit<16>)0,
+                 (bit<32>)0,
                  { hdr.ipv4.srcAddr,
                    hdr.ipv4.dstAddr,
                    meta.l4_src_port,
                    meta.l4_dst_port,
                    hdr.ipv4.protocol },
-                 (bit<32>)65536);
+                 FFT_SIZE);
 
             hash(meta.flow_signature,
                  HashAlgorithm.crc32,
@@ -244,10 +243,10 @@ control MyIngress(inout headers hdr,
             bit<8>  stored_ttl;
             bit<48> stored_ts;
 
-            reg_signature.read(stored_sig,     (bit<32>)meta.fft_index);
-            reg_egress_port.read(stored_port,  (bit<32>)meta.fft_index);
-            reg_saved_ttl.read(stored_ttl,     (bit<32>)meta.fft_index);
-            reg_timestamp.read(stored_ts,      (bit<32>)meta.fft_index);
+            reg_signature.read(stored_sig,   meta.fft_index);
+            reg_egress_port.read(stored_port, meta.fft_index);
+            reg_saved_ttl.read(stored_ttl,   meta.fft_index);
+            reg_timestamp.read(stored_ts,    meta.fft_index);
 
             bit<48> now = standard_metadata.ingress_global_timestamp;
             bit<48> age = now - stored_ts;
@@ -256,12 +255,12 @@ control MyIngress(inout headers hdr,
                 meta.cache_fft = 1;
             } else if (stored_sig == meta.flow_signature) {
                 if (hdr.ipv4.ttl < stored_ttl) {
-                    reg_signature.write((bit<32>)meta.fft_index, (bit<32>)0);
+                    reg_signature.write(meta.fft_index, 0);
                     meta.cache_fft = 1;
                 } else {
                     meta.fft_hit = 1;
                     standard_metadata.egress_spec = stored_port;
-                    reg_timestamp.write((bit<32>)meta.fft_index, now);
+                    reg_timestamp.write(meta.fft_index, now);
                 }
             }
         }
@@ -272,10 +271,10 @@ control MyIngress(inout headers hdr,
         }
 
         if (meta.cache_fft == 1 && lpm_hit && standard_metadata.egress_spec != 511) {
-            reg_signature.write((bit<32>)meta.fft_index,   meta.flow_signature);
-            reg_egress_port.write((bit<32>)meta.fft_index, standard_metadata.egress_spec);
-            reg_saved_ttl.write((bit<32>)meta.fft_index,   hdr.ipv4.ttl);
-            reg_timestamp.write((bit<32>)meta.fft_index,
+            reg_signature.write(meta.fft_index,   meta.flow_signature);
+            reg_egress_port.write(meta.fft_index, standard_metadata.egress_spec);
+            reg_saved_ttl.write(meta.fft_index,   hdr.ipv4.ttl);
+            reg_timestamp.write(meta.fft_index,
                                 standard_metadata.ingress_global_timestamp);
         }
 
