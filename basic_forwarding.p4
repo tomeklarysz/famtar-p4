@@ -75,6 +75,8 @@ struct metadata {
     bit<32> flow_signature;
     bit<1>  fft_hit;
     bit<1>  cache_fft;
+    bit<16> ecmp_group_id;
+    bit<16> ecmp_offset;
 }
 
 parser MyParser(packet_in packet,
@@ -141,6 +143,19 @@ control MyIngress(inout headers hdr,
         standard_metadata.egress_spec = port;
     }
 
+    action set_ecmp_group(bit<16> group_id, bit<16> count) {
+        meta.ecmp_group_id = group_id;
+        hash(meta.ecmp_offset,
+             HashAlgorithm.crc16,
+             (bit<16>)0,
+             { hdr.ipv4.srcAddr,
+               hdr.ipv4.dstAddr,
+               meta.l4_src_port,
+               meta.l4_dst_port,
+               hdr.ipv4.protocol },
+             (bit<32>)count);
+    }
+
     action set_dmac(bit<48> dst_mac, bit<48> src_mac) {
         hdr.ethernet.dstAddr = dst_mac;
         hdr.ethernet.srcAddr = src_mac;
@@ -163,12 +178,25 @@ control MyIngress(inout headers hdr,
         }
     }
 
+    table ecmp_nhop {
+        key = {
+            meta.ecmp_group_id: exact;
+            meta.ecmp_offset:   exact;
+        }
+        actions = {
+            set_nhop;
+            drop;
+        }
+        size = 1024;
+    }
+
     table ipv4_lpm {
         key = {
             hdr.ipv4.dstAddr: lpm;
         }
         actions = {
             set_nhop;
+            set_ecmp_group;
             drop;
             NoAction;
         }
@@ -200,10 +228,12 @@ control MyIngress(inout headers hdr,
             return;
         }
 
-        meta.fft_hit     = 0;
-        meta.cache_fft   = 0;
-        meta.l4_src_port = 0;
-        meta.l4_dst_port = 0;
+        meta.fft_hit       = 0;
+        meta.cache_fft     = 0;
+        meta.l4_src_port   = 0;
+        meta.l4_dst_port   = 0;
+        meta.ecmp_group_id = 0;
+        meta.ecmp_offset   = 0;
 
         bool is_tcp_udp = false;
 
@@ -268,6 +298,9 @@ control MyIngress(inout headers hdr,
         bool lpm_hit = false;
         if (meta.fft_hit == 0) {
             lpm_hit = ipv4_lpm.apply().hit;
+            if (meta.ecmp_group_id != 0) {
+                ecmp_nhop.apply();
+            }
         }
 
         if (meta.cache_fft == 1 && lpm_hit && standard_metadata.egress_spec != 511) {

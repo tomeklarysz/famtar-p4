@@ -1,3 +1,4 @@
+import argparse
 import threading
 import socket
 import subprocess
@@ -7,7 +8,9 @@ import p4runtime_sh.shell as sh
 p4_lock = threading.Lock()
 
 class P4Router:
-    def __init__(self, conf):
+    def __init__(self, conf, mode="famtar"):
+        self.mode = mode
+        self.ecmp_groups = {}  # prefix -> group_id
         self.name = conf["name"]
         self.grpc_addr = conf["grpc_addr"]
         self.device_id = conf["device_id"]
@@ -74,7 +77,7 @@ class P4Router:
                 route_info = self.parse_route_msg(msg)
                 if route_info and route_info['p4_port']:
                     print(f"[{self.name}] Existing route: {route_info}", flush=True)
-                    self.update_p4_route(route_info["prefix"], route_info["p4_port"])
+                    self.update_p4_route(route_info["prefix"], route_info["p4_ports"])
 
             # listen for route changes
             while True:
@@ -91,7 +94,7 @@ class P4Router:
                             print(f"[{self.name}] Skipping {route_info['prefix']}: "
                                   f"interface {route_info['ifname']} not in port_map", flush=True)
                             continue
-                        self.update_p4_route(route_info["prefix"], route_info["p4_port"])
+                        self.update_p4_route(route_info["prefix"], route_info["p4_ports"])
                     elif event == "RTM_DELROUTE":
                         print(f"[{self.name}] Route removed: {route_info}", flush=True)
                         self.delete_p4_route(route_info["prefix"])
@@ -121,14 +124,28 @@ class P4Router:
         ifname = self.iface_map.get(oif)
         p4_port = self.port_map.get(ifname)
 
+        # all mapped next hops - used to build an ECMP group in ecmp mode
+        p4_ports = []
+        for nh in msg.get_attr('RTA_MULTIPATH') or []:
+            p = self.port_map.get(self.iface_map.get(nh.get('oif')))
+            if p is not None and p not in p4_ports:
+                p4_ports.append(p)
+        if not p4_ports and p4_port is not None:
+            p4_ports = [p4_port]
+
         return {
             "prefix": prefix,
             "ifname": ifname,
             "p4_port": p4_port,
+            "p4_ports": p4_ports,
             "gateway": gateway
         }
 
-    def update_p4_route(self, prefix, p4_port):
+    def update_p4_route(self, prefix, p4_ports):
+        if self.mode == "ecmp" and len(p4_ports) > 1:
+            self.update_p4_ecmp_route(prefix, p4_ports)
+            return
+        p4_port = p4_ports[0]
         with p4_lock:
             sh.client = self.client
             te = sh.TableEntry("MyIngress.ipv4_lpm")(action="MyIngress.set_nhop")
@@ -140,6 +157,34 @@ class P4Router:
             except Exception:
                 te.modify()
                 print(f"[{self.name}] P4 route modified: {prefix} -> port {p4_port}", flush=True)
+
+    def update_p4_ecmp_route(self, prefix, p4_ports):
+        count = len(p4_ports)
+        group_id = self.ecmp_groups.setdefault(prefix, len(self.ecmp_groups) + 1)
+        with p4_lock:
+            sh.client = self.client
+            # offsets >= count are never hit (hash is taken modulo count),
+            # so stale entries from a bigger group can stay in the table
+            for offset, port in enumerate(p4_ports):
+                te = sh.TableEntry("MyIngress.ecmp_nhop")(action="MyIngress.set_nhop")
+                te.match["meta.ecmp_group_id"] = str(group_id)
+                te.match["meta.ecmp_offset"] = str(offset)
+                te.action["port"] = str(port)
+                try:
+                    te.insert()
+                except Exception:
+                    te.modify()
+
+            te = sh.TableEntry("MyIngress.ipv4_lpm")(action="MyIngress.set_ecmp_group")
+            te.match["hdr.ipv4.dstAddr"] = prefix
+            te.action["group_id"] = str(group_id)
+            te.action["count"] = str(count)
+            try:
+                te.insert()
+                print(f"[{self.name}] P4 ECMP route added: {prefix} -> ports {p4_ports} (group {group_id})", flush=True)
+            except Exception:
+                te.modify()
+                print(f"[{self.name}] P4 ECMP route modified: {prefix} -> ports {p4_ports} (group {group_id})", flush=True)
 
     def delete_p4_route(self, prefix):
         with p4_lock:
@@ -189,8 +234,10 @@ class P4Router:
 
     def start(self):
         t_route = threading.Thread(target=self.run, daemon=True)
-        t_digest = threading.Thread(target=self.listen_digests, daemon=True)
         t_route.start()
+        if self.mode != "famtar":
+            return [t_route]
+        t_digest = threading.Thread(target=self.listen_digests, daemon=True)
         t_digest.start()
         return [t_route, t_digest]
 
@@ -279,12 +326,17 @@ P4INFO_PATH = "basic_forwarding.p4info.txtpb"
 BIN_PATH = "basic_forwarding.json"
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--mode", choices=["famtar", "ecmp"], default="famtar")
+    args = parser.parse_args()
+    print(f"[*] controller mode: {args.mode}", flush=True)
+
     sh.global_options["verbose"] = False
     threads = []
 
     for i, r_conf in enumerate(ROUTERS):
         try:
-            router = P4Router(r_conf)
+            router = P4Router(r_conf, mode=args.mode)
             router.init_p4(first=(i == 0))
             threads.extend(router.start())
         except Exception as e:

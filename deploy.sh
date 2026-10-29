@@ -13,6 +13,6 @@ sudo containerlab deploy --topo topology.clab.yaml
 
 echo "[3/3] starting control plane (Python)..."
 sleep 2
-sudo GRPC_VERBOSITY=ERROR venv/bin/python3 controller.py
+sudo GRPC_VERBOSITY=ERROR venv/bin/python3 controller.py --mode "${1:-famtar}"
 
 echo "[*] environment ready. You can now run tests or interact with the network."
