@@ -16,7 +16,6 @@ topology:
       cmd: >
         bash -c "sleep 1 &&
         simple_switch_grpc
-        --log-console
         --thrift-port 9090
         --device-id 1
         -i 1@eth1 -i 2@eth2 -i 3@eth3
@@ -36,8 +35,8 @@ topology:
         - sysctl -qw net.ipv4.ip_forward=0 net.ipv6.conf.all.forwarding=0
         - apk add --no-cache tcpdump
         - iptables -A OUTPUT -p icmp --icmp-type destination-unreachable -j DROP
-        - tc qdisc replace dev eth2 root tbf rate 10mbit burst 64kb latency 50ms
-        - tc qdisc replace dev eth3 root tbf rate 10mbit burst 64kb latency 50ms
+        - tc qdisc replace dev eth2 root tbf rate 10mbit burst 128kb latency 50ms
+        - tc qdisc replace dev eth3 root tbf rate 10mbit burst 128kb latency 50ms
 
     r2:
       kind: linux
@@ -53,7 +52,6 @@ topology:
       cmd: >
         bash -c "sleep 1 &&
         simple_switch_grpc
-        --log-console
         --thrift-port 9091
         --device-id 2
         -i 1@eth1 -i 2@eth2
@@ -73,7 +71,8 @@ topology:
         - sysctl -qw net.ipv4.ip_forward=0 net.ipv6.conf.all.forwarding=0
         - apk add --no-cache tcpdump
         - iptables -A OUTPUT -p icmp --icmp-type destination-unreachable -j DROP
-        - tc qdisc replace dev eth2 root tbf rate 10mbit burst 64kb latency 50ms
+        - tc qdisc replace dev eth1 root tbf rate 10mbit burst 128kb latency 50ms
+        - tc qdisc replace dev eth2 root tbf rate 10mbit burst 128kb latency 50ms
 
     r3:
       kind: linux
@@ -89,7 +88,6 @@ topology:
       cmd: >
         bash -c "sleep 1 &&
         simple_switch_grpc
-        --log-console
         --thrift-port 9092
         --device-id 3
         -i 1@eth1 -i 2@eth2
@@ -109,7 +107,8 @@ topology:
         - sysctl -qw net.ipv4.ip_forward=0 net.ipv6.conf.all.forwarding=0
         - apk add --no-cache tcpdump
         - iptables -A OUTPUT -p icmp --icmp-type destination-unreachable -j DROP
-        - tc qdisc replace dev eth2 root tbf rate 10mbit burst 64kb latency 50ms
+        - tc qdisc replace dev eth1 root tbf rate 10mbit burst 128kb latency 50ms
+        - tc qdisc replace dev eth2 root tbf rate 10mbit burst 128kb latency 50ms
 
     r4:
       kind: linux
@@ -125,7 +124,6 @@ topology:
       cmd: >
         bash -c "sleep 1 &&
         simple_switch_grpc
-        --log-console
         --thrift-port 9093
         --device-id 4
         -i 1@eth1 -i 2@eth2 -i 3@eth3
@@ -145,6 +143,8 @@ topology:
         - sysctl -qw net.ipv4.ip_forward=0 net.ipv6.conf.all.forwarding=0
         - apk add --no-cache tcpdump
         - iptables -A OUTPUT -p icmp --icmp-type destination-unreachable -j DROP
+        - tc qdisc replace dev eth2 root tbf rate 10mbit burst 128kb latency 50ms
+        - tc qdisc replace dev eth3 root tbf rate 10mbit burst 128kb latency 50ms
 
     h1:
       kind: linux

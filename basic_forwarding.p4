@@ -11,8 +11,8 @@ const bit<48> FFT_TIMEOUT_US = 30000000;
 const bit<48> CONG_WINDOW_US        = 200000;   // 200 ms
 const bit<64> LINK_CAPACITY_BYTES_S = 1250000;  // 10 Mbit/s = 1 250 000 B/s
 const bit<64> WINDOW_CAPACITY_BYTES = (LINK_CAPACITY_BYTES_S * (bit<64>)CONG_WINDOW_US) / 1000000; // 250 000 B
-const bit<64> BYTES_TH_MAX          = (WINDOW_CAPACITY_BYTES * 80) / 100; // 80% (200 000 B)
-const bit<64> BYTES_TH_MIN          = (WINDOW_CAPACITY_BYTES * 30) / 100; // 30% (75 000 B)
+const bit<64> BYTES_TH_MAX          = (WINDOW_CAPACITY_BYTES * 90) / 100; // 90% (225 000 B)
+const bit<64> BYTES_TH_MIN          = (WINDOW_CAPACITY_BYTES * 70) / 100; // 70% (175 000 B)
 
 struct congestion_digest_t {
     bit<9> port;
