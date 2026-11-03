@@ -20,12 +20,13 @@ class P4Router:
         self.default_metrics = conf.get("default_metrics", {})
         self.iface_map = {}
         self.client = None
+        self.netns_ready = threading.Event()
+        self.p4_ready = threading.Event()
 
     def ifname_from_port(self, port):
         return next((name for name, p in self.port_map.items() if p == port), None)
 
     def init_p4(self, first=False):
-        """Connect to switch, push pipeline, install DMAC rules and enable digests."""
         with p4_lock:
             if first:
                 sh.setup(
@@ -66,6 +67,8 @@ class P4Router:
         # flags=0: do not create a new empty netns if the name is wrong
         with NetNS(self.netns, flags=0) as ipr:
             ipr.bind()
+            self.netns_ready.set()
+            self.p4_ready.wait()
             print(f"[{self.name}] listening on {self.netns}", flush=True)
 
             # map ifindex -> port name
@@ -110,9 +113,6 @@ class P4Router:
         gateway = msg.get_attr('RTA_GATEWAY')
         prefix = f"{dst_ip}/{dst_len}" if dst_ip else "0.0.0.0/0"
 
-        # ECMP routes (e.g. OSPF with equal-cost paths) carry no RTA_OIF /
-        # RTA_GATEWAY - next hops are in RTA_MULTIPATH instead. The P4 table
-        # supports a single egress port, so use the first mapped next hop.
         if oif is None:
             for nh in msg.get_attr('RTA_MULTIPATH') or []:
                 nh_ifname = self.iface_map.get(nh.get('oif'))
@@ -334,13 +334,23 @@ def main():
     sh.global_options["verbose"] = False
     threads = []
 
-    for i, r_conf in enumerate(ROUTERS):
+    routers = [P4Router(r_conf, mode=args.mode) for r_conf in ROUTERS]
+    for router in routers:
+        t_route = threading.Thread(target=router.run, daemon=True)
+        t_route.start()
+        router.netns_ready.wait()
+        threads.append(t_route)
+
+    for i, router in enumerate(routers):
         try:
-            router = P4Router(r_conf, mode=args.mode)
             router.init_p4(first=(i == 0))
-            threads.extend(router.start())
+            router.p4_ready.set()
+            if router.mode == "famtar":
+                t_digest = threading.Thread(target=router.listen_digests, daemon=True)
+                t_digest.start()
+                threads.append(t_digest)
         except Exception as e:
-            print(f"Error initializing router {r_conf['name']}: {e}", flush=True)
+            print(f"Error initializing router {router.name}: {e}", flush=True)
 
     for t in threads:
         t.join()
