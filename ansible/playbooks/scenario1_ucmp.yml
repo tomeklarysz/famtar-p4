@@ -80,12 +80,12 @@
         STAGGER={{ stagger_sec }}
         DUR2=$(( DUR1 - STAGGER ))
 
-        docker exec clab-p4-basic-lab-h1 iperf3 -c {{ target_ip }} -p 5201 -b {{ flow1_rate }} -l 16K -t $DUR1 -i 1 --json > {{ results_dir }}/flow1.json &
+        docker exec clab-p4-basic-lab-h1 iperf3 -c {{ target_ip }} -p 5201 -b {{ flow1_rate }} -l 16K -t $DUR1 -i 1 --get-server-output --json > {{ results_dir }}/flow1.json &
         PID1=$!
 
         sleep $STAGGER
 
-        docker exec clab-p4-basic-lab-h1 iperf3 -c {{ target_ip }} -p 5202 -b {{ flow2_rate }} -l 16K -t $DUR2 -i 1 --json > {{ results_dir }}/flow2.json &
+        docker exec clab-p4-basic-lab-h1 iperf3 -c {{ target_ip }} -p 5202 -b {{ flow2_rate }} -l 16K -t $DUR2 -i 1 --get-server-output --json > {{ results_dir }}/flow2.json &
         PID2=$!
 
         sleep 3

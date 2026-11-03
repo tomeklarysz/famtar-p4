@@ -35,8 +35,8 @@ topology:
         - sysctl -qw net.ipv4.ip_forward=0 net.ipv6.conf.all.forwarding=0
         - apk add --no-cache tcpdump
         - iptables -A OUTPUT -p icmp --icmp-type destination-unreachable -j DROP
-        - tc qdisc replace dev eth2 root tbf rate 10mbit burst 128kb latency 50ms
-        - tc qdisc replace dev eth3 root tbf rate 10mbit burst 128kb latency 50ms
+        - tc qdisc replace dev eth2 root tbf rate 10mbit burst 16kb latency 50ms
+        - tc qdisc replace dev eth3 root tbf rate 10mbit burst 16kb latency 50ms
 
     r2:
       kind: linux
@@ -71,8 +71,8 @@ topology:
         - sysctl -qw net.ipv4.ip_forward=0 net.ipv6.conf.all.forwarding=0
         - apk add --no-cache tcpdump
         - iptables -A OUTPUT -p icmp --icmp-type destination-unreachable -j DROP
-        - tc qdisc replace dev eth1 root tbf rate 10mbit burst 128kb latency 50ms
-        - tc qdisc replace dev eth2 root tbf rate 10mbit burst 128kb latency 50ms
+        - tc qdisc replace dev eth1 root tbf rate 10mbit burst 16kb latency 50ms
+        - tc qdisc replace dev eth2 root tbf rate 10mbit burst 16kb latency 50ms
 
     r3:
       kind: linux
@@ -107,8 +107,8 @@ topology:
         - sysctl -qw net.ipv4.ip_forward=0 net.ipv6.conf.all.forwarding=0
         - apk add --no-cache tcpdump
         - iptables -A OUTPUT -p icmp --icmp-type destination-unreachable -j DROP
-        - tc qdisc replace dev eth1 root tbf rate 10mbit burst 128kb latency 50ms
-        - tc qdisc replace dev eth2 root tbf rate 10mbit burst 128kb latency 50ms
+        - tc qdisc replace dev eth1 root tbf rate 10mbit burst 16kb latency 50ms
+        - tc qdisc replace dev eth2 root tbf rate 10mbit burst 16kb latency 50ms
 
     r4:
       kind: linux
@@ -143,8 +143,8 @@ topology:
         - sysctl -qw net.ipv4.ip_forward=0 net.ipv6.conf.all.forwarding=0
         - apk add --no-cache tcpdump
         - iptables -A OUTPUT -p icmp --icmp-type destination-unreachable -j DROP
-        - tc qdisc replace dev eth2 root tbf rate 10mbit burst 128kb latency 50ms
-        - tc qdisc replace dev eth3 root tbf rate 10mbit burst 128kb latency 50ms
+        - tc qdisc replace dev eth2 root tbf rate 10mbit burst 16kb latency 50ms
+        - tc qdisc replace dev eth3 root tbf rate 10mbit burst 16kb latency 50ms
 
     h1:
       kind: linux

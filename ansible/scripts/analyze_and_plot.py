@@ -26,6 +26,8 @@ def parse_iperf(filepath, offset_sec=0):
     series = {}
     for iv in data.get("intervals", []):
         s = iv.get("sum", {})
+        if s.get("seconds", 1.0) < 0.5:
+            continue
         t = int(round(s.get("end", 0))) + offset_sec
         series[t] = round(s.get("bits_per_second", 0) / 1e6, 2)
 
@@ -38,11 +40,51 @@ def parse_iperf(filepath, offset_sec=0):
     }
 
 
-def count_packets(filepath, port):
-    if not os.path.exists(filepath):
-        return 0
-    with open(filepath, "r", errors="ignore") as f:
-        return sum(1 for line in f if f".{port}:" in line or f".{port} " in line)
+def parse_wire_throughput(r2_path, r3_path, stagger_sec=2, max_sec=16):
+    counts = {"r2_f1": 0, "r3_f1": 0, "r2_f2": 0, "r3_f2": 0}
+    pkts = []
+    pat = re.compile(
+        r"(\d+):(\d+):(\d+\.\d+)\s+IP\s+\S+\s+>\s+10\.0\.2\.1\.(5201|5202):.*length\s+(\d+)"
+    )
+
+    for tag, path in (("r2", r2_path), ("r3", r3_path)):
+        if not os.path.exists(path):
+            continue
+        with open(path, "r", errors="ignore") as f:
+            for line in f:
+                if ".5201:" in line or ".5201 " in line:
+                    counts[f"{tag}_f1"] += 1
+                elif ".5202:" in line or ".5202 " in line:
+                    counts[f"{tag}_f2"] += 1
+                m = pat.search(line)
+                if m:
+                    length = int(m.group(5))
+                    if length > 0:
+                        t = (
+                            int(m.group(1)) * 3600
+                            + int(m.group(2)) * 60
+                            + float(m.group(3))
+                        )
+                        pkts.append((t, int(m.group(4)), length))
+
+    if not pkts:
+        return counts, None, None
+
+    f2_data = [x[0] for x in pkts if x[1] == 5202 and x[2] > 1000]
+    t0 = (min(f2_data) - float(stagger_sec)) if f2_data else min(x[0] for x in pkts)
+
+    s1, s2 = {}, {}
+    for sec in range(1, max_sec + 1):
+        b1 = sum(x[2] for x in pkts if (sec - 1) <= (x[0] - t0) < sec and x[1] == 5201)
+        b2 = sum(x[2] for x in pkts if (sec - 1) <= (x[0] - t0) < sec and x[1] == 5202)
+        s1[sec] = round(b1 * 8 / 1e6, 2)
+        s2[sec] = round(b2 * 8 / 1e6, 2)
+
+    steady_range = list(range(stagger_sec + 2, max_sec + 1))
+    avg1 = round(sum(s1[t] for t in steady_range) / len(steady_range), 2)
+    avg2 = round(sum(s2[t] for t in steady_range) / len(steady_range), 2)
+
+    return counts, (s1, avg1), (s2, avg2)
 
 
 def extract_series(data):
@@ -172,13 +214,18 @@ def handle_throughput(args):
     flow1 = parse_iperf(os.path.join(args.dir, "flow1.json"), offset_sec=0)
     flow2 = parse_iperf(os.path.join(args.dir, "flow2.json"), offset_sec=args.stagger)
 
-    r2_f1 = count_packets(os.path.join(args.dir, "tcpdump_r2.txt"), 5201)
-    r2_f2 = count_packets(os.path.join(args.dir, "tcpdump_r2.txt"), 5202)
-    r3_f1 = count_packets(os.path.join(args.dir, "tcpdump_r3.txt"), 5201)
-    r3_f2 = count_packets(os.path.join(args.dir, "tcpdump_r3.txt"), 5202)
+    counts, w1, w2 = parse_wire_throughput(
+        os.path.join(args.dir, "tcpdump_r2.txt"),
+        os.path.join(args.dir, "tcpdump_r3.txt"),
+        stagger_sec=args.stagger,
+    )
+    if flow1 and w1:
+        flow1["series"], flow1["rcv_mbps"] = w1
+    if flow2 and w2:
+        flow2["series"], flow2["rcv_mbps"] = w2
 
-    p1 = "Ścieżka 1 (r2)" if r2_f1 >= r3_f1 else "Ścieżka 2 (r3)"
-    p2 = "Ścieżka 1 (r2)" if r2_f2 >= r3_f2 else "Ścieżka 2 (r3)"
+    p1 = "Ścieżka 1 (r2)" if counts["r2_f1"] >= counts["r3_f1"] else "Ścieżka 2 (r3)"
+    p2 = "Ścieżka 1 (r2)" if counts["r2_f2"] >= counts["r3_f2"] else "Ścieżka 2 (r3)"
 
     tot_rcv = round((flow1["rcv_mbps"] if flow1 else 0.0) + (flow2["rcv_mbps"] if flow2 else 0.0), 2)
     tot_ret = (flow1["retransmits"] if flow1 else 0) + (flow2["retransmits"] if flow2 else 0)
@@ -190,7 +237,7 @@ def handle_throughput(args):
         "flow2": flow2,
         "flow1_path": p1,
         "flow2_path": p2,
-        "packets": {"r2_f1": r2_f1, "r3_f1": r3_f1, "r2_f2": r2_f2, "r3_f2": r3_f2},
+        "packets": counts,
         "aggregate_rcv_mbps": tot_rcv,
         "total_retransmits": tot_ret,
     }

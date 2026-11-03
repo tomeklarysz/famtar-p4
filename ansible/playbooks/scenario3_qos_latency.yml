@@ -85,7 +85,7 @@
         sleep {{ elephant_start }}
 
         # Start przepływu Elephant Flow nasycającego łącze 10 Mbit/s
-        docker exec clab-p4-basic-lab-h1 iperf3 -c {{ target_ip }} -p 5201 -b {{ elephant_rate }} -l 16K -t {{ elephant_duration }} -i 1 --json > {{ results_dir }}/elephant.json || true
+        docker exec clab-p4-basic-lab-h1 iperf3 -c {{ target_ip }} -p 5201 -b {{ elephant_rate }} -l 16K -t {{ elephant_duration }} -i 1 --get-server-output --json > {{ results_dir }}/elephant.json || true
 
         wait $PING_PID || true
       args:
