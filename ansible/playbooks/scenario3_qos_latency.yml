@@ -1,0 +1,119 @@
+---
+- name: "Scenariusz 3: Ochrona QoS (Mice + Elephant) i czas reakcji pętli sterowania"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    mode: "famtar"
+    scenario_id: "scenario3_qos"
+    elephant_rate: "10M"
+    total_duration: 15
+    elephant_start: 2
+    elephant_duration: 10
+    target_ip: "10.0.2.1"
+    project_root: "{{ (playbook_dir ~ '/../..') | realpath }}"
+    results_dir: "{{ project_root }}/results/{{ scenario_id }}_{{ mode }}"
+
+  tasks:
+    - name: Wyświetlenie parametrów testu
+      ansible.builtin.debug:
+        msg: "Uruchamianie {{ scenario_id }} | Tryb: {{ mode | upper }} | Katalog wyników: {{ results_dir }}"
+
+    - name: Utworzenie katalogu na wyniki
+      ansible.builtin.file:
+        path: "{{ results_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Czyszczenie rejestrów P4 (FFT oraz liczników przeciążeń) przed testem
+      ansible.builtin.shell: |
+        for item in "r1:9090" "r2:9091" "r3:9092" "r4:9093"; do
+          R="${item%%:*}"
+          PORT="${item##*:}"
+          docker exec -i "clab-p4-basic-lab-$R" simple_switch_CLI --thrift-port "$PORT" << 'EOF' >/dev/null
+        register_reset MyIngress.reg_signature
+        register_reset MyIngress.reg_egress_port
+        register_reset MyIngress.reg_saved_ttl
+        register_reset MyIngress.reg_timestamp
+        register_reset MyIngress.reg_port_bytes
+        register_reset MyIngress.reg_port_last_ts
+        register_reset MyIngress.reg_port_congested
+        EOF
+        done
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Konfiguracja metryk IS-IS (Ścieżka 1 przez r2 = 10, Ścieżka 2 przez r3 = 20)
+      ansible.builtin.shell: |
+        docker exec clab-p4-basic-lab-r1-frr vtysh -c "conf t" -c "router isis FAMTAR" -c "lsp-gen-interval 1" -c "spf-interval 1" -c "interface eth2" -c "isis metric 10" -c "interface eth3" -c "isis metric 20"
+        docker exec clab-p4-basic-lab-r2-frr vtysh -c "conf t" -c "router isis FAMTAR" -c "lsp-gen-interval 1" -c "spf-interval 1" -c "interface eth1" -c "isis metric 10" -c "interface eth2" -c "isis metric 10"
+        docker exec clab-p4-basic-lab-r3-frr vtysh -c "conf t" -c "router isis FAMTAR" -c "lsp-gen-interval 1" -c "spf-interval 1" -c "interface eth1" -c "isis metric 20" -c "interface eth2" -c "isis metric 20"
+        docker exec clab-p4-basic-lab-r4-frr vtysh -c "conf t" -c "router isis FAMTAR" -c "lsp-gen-interval 1" -c "spf-interval 1" -c "interface eth2" -c "isis metric 10" -c "interface eth3" -c "isis metric 20"
+      changed_when: true
+
+    - name: Odczekanie 3 s na zbieżność IS-IS i aktualizację tablic P4
+      ansible.builtin.pause:
+        seconds: 3
+
+    - name: Przygotowanie serwera iperf3 na h2 i wyczyszczenie procesów tcpdump
+      ansible.builtin.shell: |
+        docker exec clab-p4-basic-lab-h1 pkill -f iperf3 2>/dev/null || true
+        docker exec clab-p4-basic-lab-h1 pkill -f ping 2>/dev/null || true
+        docker exec clab-p4-basic-lab-h2 pgrep -f "iperf3 -s -p 5201" >/dev/null || docker exec clab-p4-basic-lab-h2 iperf3 -s -p 5201 -D
+        docker exec clab-p4-basic-lab-r2-frr pkill -f tcpdump 2>/dev/null || true
+        docker exec clab-p4-basic-lab-r3-frr pkill -f tcpdump 2>/dev/null || true
+        docker exec clab-p4-basic-lab-r2-frr rm -f /tmp/r2_icmp.txt
+        docker exec clab-p4-basic-lab-r3-frr rm -f /tmp/r3_icmp.txt
+      changed_when: false
+
+    - name: Uruchomienie nasłuchu tcpdump (ICMP Echo Request ze znacznikami czasu) na r2 i r3
+      ansible.builtin.shell: |
+        docker exec -d clab-p4-basic-lab-r2-frr sh -c "tcpdump -tt -l -n -i eth1 'icmp and src host 10.0.1.1' > /tmp/r2_icmp.txt 2>&1"
+        docker exec -d clab-p4-basic-lab-r3-frr sh -c "tcpdump -tt -l -n -i eth1 'icmp and src host 10.0.1.1' > /tmp/r3_icmp.txt 2>&1"
+      changed_when: false
+
+    - name: Pomiar RTT strumienia Mice (ping co 0.1 s) przy włączeniu Elephant Flow (od {{ elephant_start }}s przez {{ elephant_duration }}s)
+      ansible.builtin.shell: |
+        PING_COUNT=$(( {{ total_duration }} * 10 ))
+
+        # Start ciągłego strumienia Mice (ICMP ping co 100 ms)
+        docker exec clab-p4-basic-lab-h1 ping -c $PING_COUNT -i 0.1 {{ target_ip }} > {{ results_dir }}/ping.txt &
+        PING_PID=$!
+
+        sleep {{ elephant_start }}
+
+        # Start przepływu Elephant Flow nasycającego łącze 10 Mbit/s
+        docker exec clab-p4-basic-lab-h1 iperf3 -c {{ target_ip }} -p 5201 -b {{ elephant_rate }} -l 16K -t {{ elephant_duration }} -i 1 --json > {{ results_dir }}/elephant.json || true
+
+        wait $PING_PID || true
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Zatrzymanie tcpdump i pobranie zrzutów pakietów ICMP
+      ansible.builtin.shell: |
+        docker exec clab-p4-basic-lab-r2-frr pkill -f tcpdump 2>/dev/null || true
+        docker exec clab-p4-basic-lab-r3-frr pkill -f tcpdump 2>/dev/null || true
+        docker cp clab-p4-basic-lab-r2-frr:/tmp/r2_icmp.txt {{ results_dir }}/icmp_r2.txt || true
+        docker cp clab-p4-basic-lab-r3-frr:/tmp/r3_icmp.txt {{ results_dir }}/icmp_r3.txt || true
+      changed_when: false
+
+    - name: Analiza opóźnień RTT, czasu konwergencji i generowanie wykresów PNG
+      ansible.builtin.command: >
+        /usr/bin/python3 {{ project_root }}/ansible/scripts/analyze_and_plot.py
+        --type qos
+        --scenario {{ scenario_id }}
+        --mode {{ mode }}
+        --dir {{ results_dir }}
+        --stagger {{ elephant_start }}
+        --elephant-duration {{ elephant_duration }}
+      environment:
+        MPLCONFIGDIR: "/tmp/matplotlib"
+      register: analysis_out
+      changed_when: false
+
+    - name: Podsumowanie pomiaru
+      ansible.builtin.debug:
+        msg: "{{ analysis_out.stdout_lines }}"

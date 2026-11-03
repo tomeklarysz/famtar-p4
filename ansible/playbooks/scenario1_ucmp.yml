@@ -1,0 +1,123 @@
+---
+- name: "Scenariusz 1: Topologia asymetryczna (UCMP 10 vs 20) - FAMTAR vs ECMP"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    mode: "famtar"
+    scenario_id: "scenario1_ucmp"
+    flow1_rate: "9.4M"
+    flow2_rate: "8.0M"
+    flow1_duration: 16
+    stagger_sec: 2
+    target_ip: "10.0.2.1"
+    project_root: "{{ (playbook_dir ~ '/../..') | realpath }}"
+    results_dir: "{{ project_root }}/results/{{ scenario_id }}_{{ mode }}"
+
+  tasks:
+    - name: Wyświetlenie parametrów testu
+      ansible.builtin.debug:
+        msg: "Uruchamianie {{ scenario_id }} | Tryb: {{ mode | upper }} | Katalog wyników: {{ results_dir }}"
+
+    - name: Utworzenie katalogu na wyniki
+      ansible.builtin.file:
+        path: "{{ results_dir }}"
+        state: directory
+        mode: "0755"
+
+    - name: Czyszczenie rejestrów P4 (FFT oraz liczników przeciążeń) przed testem
+      ansible.builtin.shell: |
+        for item in "r1:9090" "r2:9091" "r3:9092" "r4:9093"; do
+          R="${item%%:*}"
+          PORT="${item##*:}"
+          docker exec -i "clab-p4-basic-lab-$R" simple_switch_CLI --thrift-port "$PORT" << 'EOF' >/dev/null
+        register_reset MyIngress.reg_signature
+        register_reset MyIngress.reg_egress_port
+        register_reset MyIngress.reg_saved_ttl
+        register_reset MyIngress.reg_timestamp
+        register_reset MyIngress.reg_port_bytes
+        register_reset MyIngress.reg_port_last_ts
+        register_reset MyIngress.reg_port_congested
+        EOF
+        done
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Konfiguracja asymetrycznych metryk IS-IS (Ścieżka 1 przez r2 = 10, Ścieżka 2 przez r3 = 20)
+      ansible.builtin.shell: |
+        docker exec clab-p4-basic-lab-r1-frr vtysh -c "conf t" -c "router isis FAMTAR" -c "lsp-gen-interval 1" -c "spf-interval 1" -c "interface eth2" -c "isis metric 10" -c "interface eth3" -c "isis metric 20"
+        docker exec clab-p4-basic-lab-r2-frr vtysh -c "conf t" -c "router isis FAMTAR" -c "lsp-gen-interval 1" -c "spf-interval 1" -c "interface eth1" -c "isis metric 10" -c "interface eth2" -c "isis metric 10"
+        docker exec clab-p4-basic-lab-r3-frr vtysh -c "conf t" -c "router isis FAMTAR" -c "lsp-gen-interval 1" -c "spf-interval 1" -c "interface eth1" -c "isis metric 20" -c "interface eth2" -c "isis metric 20"
+        docker exec clab-p4-basic-lab-r4-frr vtysh -c "conf t" -c "router isis FAMTAR" -c "lsp-gen-interval 1" -c "spf-interval 1" -c "interface eth2" -c "isis metric 10" -c "interface eth3" -c "isis metric 20"
+      changed_when: true
+
+    - name: Odczekanie 3 s na zbieżność IS-IS i aktualizację tablic P4
+      ansible.builtin.pause:
+        seconds: 3
+
+    - name: Przygotowanie serwerów iperf3 na h2 i wyczyszczenie starych procesów tcpdump
+      ansible.builtin.shell: |
+        docker exec clab-p4-basic-lab-h1 pkill -f iperf3 2>/dev/null || true
+        docker exec clab-p4-basic-lab-h2 pgrep -f "iperf3 -s -p 5201" >/dev/null || docker exec clab-p4-basic-lab-h2 iperf3 -s -p 5201 -D
+        docker exec clab-p4-basic-lab-h2 pgrep -f "iperf3 -s -p 5202" >/dev/null || docker exec clab-p4-basic-lab-h2 iperf3 -s -p 5202 -D
+        docker exec clab-p4-basic-lab-r2-frr pkill -f tcpdump 2>/dev/null || true
+        docker exec clab-p4-basic-lab-r3-frr pkill -f tcpdump 2>/dev/null || true
+        docker exec clab-p4-basic-lab-r2-frr rm -f /tmp/r2_dump.txt
+        docker exec clab-p4-basic-lab-r3-frr rm -f /tmp/r3_dump.txt
+      changed_when: false
+
+    - name: Uruchomienie nasłuchu tcpdump na r2 (Ścieżka 1) i r3 (Ścieżka 2)
+      ansible.builtin.shell: |
+        docker exec -d clab-p4-basic-lab-r2-frr sh -c "tcpdump -l -n -i eth1 'tcp and (dst port 5201 or dst port 5202)' > /tmp/r2_dump.txt 2>&1"
+        docker exec -d clab-p4-basic-lab-r3-frr sh -c "tcpdump -l -n -i eth1 'tcp and (dst port 5201 or dst port 5202)' > /tmp/r3_dump.txt 2>&1"
+      changed_when: false
+
+    - name: "Generowanie dwóch przepływów (Flow 1: {{ flow1_rate }}, po {{ stagger_sec }}s Flow 2: {{ flow2_rate }}) + zrzut FFT"
+      ansible.builtin.shell: |
+        DUR1={{ flow1_duration }}
+        STAGGER={{ stagger_sec }}
+        DUR2=$(( DUR1 - STAGGER ))
+
+        docker exec clab-p4-basic-lab-h1 iperf3 -c {{ target_ip }} -p 5201 -b {{ flow1_rate }} -l 16K -t $DUR1 -i 1 --json > {{ results_dir }}/flow1.json &
+        PID1=$!
+
+        sleep $STAGGER
+
+        docker exec clab-p4-basic-lab-h1 iperf3 -c {{ target_ip }} -p 5202 -b {{ flow2_rate }} -l 16K -t $DUR2 -i 1 --json > {{ results_dir }}/flow2.json &
+        PID2=$!
+
+        sleep 3
+        /usr/bin/python3 {{ project_root }}/scripts/fft_dump.py > {{ results_dir }}/fft_snapshot.txt 2>&1 || true
+
+        wait $PID1 || true
+        wait $PID2 || true
+      args:
+        executable: /bin/bash
+      changed_when: true
+
+    - name: Zatrzymanie tcpdump i pobranie zrzutów pakietów
+      ansible.builtin.shell: |
+        docker exec clab-p4-basic-lab-r2-frr pkill -f tcpdump 2>/dev/null || true
+        docker exec clab-p4-basic-lab-r3-frr pkill -f tcpdump 2>/dev/null || true
+        docker cp clab-p4-basic-lab-r2-frr:/tmp/r2_dump.txt {{ results_dir }}/tcpdump_r2.txt || true
+        docker cp clab-p4-basic-lab-r3-frr:/tmp/r3_dump.txt {{ results_dir }}/tcpdump_r3.txt || true
+      changed_when: false
+
+    - name: Analiza wyników i generowanie wykresów PNG
+      ansible.builtin.command: >
+        /usr/bin/python3 {{ project_root }}/ansible/scripts/analyze_and_plot.py
+        --type throughput
+        --scenario {{ scenario_id }}
+        --mode {{ mode }}
+        --dir {{ results_dir }}
+        --stagger {{ stagger_sec }}
+      environment:
+        MPLCONFIGDIR: "/tmp/matplotlib"
+      register: analysis_out
+      changed_when: false
+
+    - name: Podsumowanie pomiaru
+      ansible.builtin.debug:
+        msg: "{{ analysis_out.stdout_lines }}"
