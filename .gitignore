@@ -2,3 +2,8 @@ venv/
 __pycache__/
 
 clab-*/
+
+results/
+
+basic_forwarding.json
+basic_forwarding.p4info.txtpb
