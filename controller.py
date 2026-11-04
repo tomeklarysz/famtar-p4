@@ -2,17 +2,26 @@ import argparse
 import threading
 import socket
 import subprocess
+import time
+import yaml
 from pyroute2 import NetNS
 import p4runtime_sh.shell as sh
 
+P4INFO_PATH = "basic_forwarding.p4info.txtpb"
+BIN_PATH = "basic_forwarding.json"
+ELECTION_ID = (0, 1)
+
+
 class P4Router:
     def __init__(self, conf, mode="famtar"):
+        self.conf = conf
         self.mode = mode
         self.ecmp_groups = {}  # prefix -> group_id
         self.name = conf["name"]
         self.grpc_addr = conf["grpc_addr"]
         self.device_id = conf["device_id"]
         self.netns = conf["netns"]
+        self.frr_container = conf.get("frr_container", f"clab-p4-basic-lab-{self.name}-frr")
         self.port_map = conf["port_map"]
         self.dmac = conf.get("dmac", {})
         self.default_metrics = conf.get("default_metrics", {})
@@ -43,33 +52,22 @@ class P4Router:
             te.insert()
             print(f"[{self.name}] dmac: port {port} -> dst {dst_mac}, src {src_mac}", flush=True)
 
-        de = sh.DigestEntry("congestion_digest_t")
-        de.max_timeout_ns = 0
-        de.max_list_size = 1
-        de.ack_timeout_ns = 0
-        de.insert()
-        print(f"[{self.name}] DigestEntry installed for congestion_digest_t", flush=True)
-
     def run(self):
-        # flags=0: do not create a new empty netns if the name is wrong
         with NetNS(self.netns, flags=0) as ipr:
             ipr.bind()
             self.netns_ready.set()
             self.p4_ready.wait()
             print(f"[{self.name}] listening on {self.netns}", flush=True)
 
-            # map ifindex -> port name
             for link in ipr.get_links():
                 self.iface_map[link["index"]] = link.get_attr("IFLA_IFNAME")
 
-            # sync existing routes
             for msg in ipr.get_routes(family=socket.AF_INET, table=254):
                 route_info = self.parse_route_msg(msg)
                 if route_info and route_info['p4_port']:
                     print(f"[{self.name}] Existing route: {route_info}", flush=True)
                     self.update_p4_route(route_info["prefix"], route_info["p4_ports"])
 
-            # listen for route changes
             while True:
                 for msg in ipr.get():
                     event = msg.get("event")
@@ -92,7 +90,7 @@ class P4Router:
     def parse_route_msg(self, msg):
         if msg.get('family') != socket.AF_INET:
             return None
-        if msg.get('table') != 254:  # main routing table
+        if msg.get('table') != 254:
             return None
         dst_len = msg.get('dst_len')
         dst_ip = msg.get_attr('RTA_DST')
@@ -111,7 +109,6 @@ class P4Router:
         ifname = self.iface_map.get(oif)
         p4_port = self.port_map.get(ifname)
 
-        # all mapped next hops - used to build an ECMP group in ecmp mode
         p4_ports = []
         for nh in msg.get_attr('RTA_MULTIPATH') or []:
             p = self.port_map.get(self.iface_map.get(nh.get('oif')))
@@ -146,8 +143,6 @@ class P4Router:
     def update_p4_ecmp_route(self, prefix, p4_ports):
         count = len(p4_ports)
         group_id = self.ecmp_groups.setdefault(prefix, len(self.ecmp_groups) + 1)
-        # offsets >= count are never hit (hash is taken modulo count),
-        # so stale entries from a bigger group can stay in the table
         for offset, port in enumerate(p4_ports):
             te = sh.TableEntry("MyIngress.ecmp_nhop")(action="MyIngress.set_nhop")
             te.match["meta.ecmp_group_id"] = str(group_id)
@@ -178,145 +173,94 @@ class P4Router:
         except Exception as e:
             print(f"[{self.name}] Error deleting P4 route {prefix}: {e}", flush=True)
 
-    def listen_digests(self):
-        print(f"[{self.name}] listening for congestion digests via gRPC stream", flush=True)
+    def read_port_bytes(self, port):
+        try:
+            ce = sh.CounterEntry("MyIngress.port_bytes_counter")
+            ce.index = port
+            for entry in ce.read():
+                return entry.data.byte_count
+        except Exception as e:
+            return 0
+        return 0
+
+    def set_isis_metric(self, ifname, metric):
+        subprocess.run([
+            "docker", "exec", self.frr_container,
+            "vtysh", "-c", "conf t", "-c", f"interface {ifname}", "-c", f"isis metric {metric}"
+        ], check=False)
+
+    def poll_traffic_loop(self):
+        print(f"[{self.name}] starting polling traffic loop for FAMTAR", flush=True)
+        cfg = self.conf.get("congestion", {})
+        interval = cfg.get("poll_interval_s", 0.1)
+        capacity = cfg.get("capacity_bps", 10_000_000)
+        th_max = cfg.get("th_max", 0.90)
+        th_min = cfg.get("th_min", 0.70)
+        alpha = cfg.get("ewma_alpha", 0.5)
+        hold_down = cfg.get("hold_down_s", 2.0)
+        congested_metric = cfg.get("congested_metric", 1000)
+
+        port_state = {}
+        for ifname, port in self.port_map.items():
+            if ifname in self.default_metrics:
+                port_state[port] = {
+                    "ifname": ifname,
+                    "prev_bytes": self.read_port_bytes(port),
+                    "prev_time": time.time(),
+                    "ewma_rate": 0.0,
+                    "congested": False,
+                    "last_state_change": 0.0,
+                }
+
         while True:
-            msg = self.client.get_stream_packet("digest", timeout=None)
-            if msg is None:
-                break
-            for entry in msg.digest.data:
-                port = int.from_bytes(entry.struct.members[0].bitstring, "big")
-                status = int.from_bytes(entry.struct.members[1].bitstring, "big")
-                ifname = self.ifname_from_port(port)
-                if not ifname:
-                    print(f"[{self.name}] Digest for unmapped port {port} (status={status})", flush=True)
+            time.sleep(interval)
+            now = time.time()
+            for port, st in port_state.items():
+                curr_bytes = self.read_port_bytes(port)
+                dt = now - st["prev_time"]
+                if dt <= 0:
                     continue
-                if ifname not in self.default_metrics:
-                    # ignore host interfaces - not transit
-                    continue
-                if status == 1:
-                    print(f"[{self.name}] CONGESTION DETECTED on port {port} ({ifname}) -> setting IS-IS metric to 1000", flush=True)
-                    subprocess.run([
-                        "docker", "exec", f"clab-p4-basic-lab-{self.name}-frr",
-                        "vtysh", "-c", "conf t", "-c", f"interface {ifname}", "-c", "isis metric 1000"
-                    ], check=False)
-                elif status == 0:
-                    default_metric = self.default_metrics.get(ifname, 10)
-                    print(f"[{self.name}] CONGESTION CLEARED on port {port} ({ifname}) -> restoring IS-IS metric to {default_metric}", flush=True)
-                    subprocess.run([
-                        "docker", "exec", f"clab-p4-basic-lab-{self.name}-frr",
-                        "vtysh", "-c", "conf t", "-c", f"interface {ifname}", "-c", f"isis metric {default_metric}"
-                    ], check=False)
 
-            ack = sh.p4runtime_pb2.StreamMessageRequest()
-            ack.digest_ack.digest_id = msg.digest.digest_id
-            ack.digest_ack.list_id = msg.digest.list_id
-            self.client.stream_out_q.put(ack)
+                delta_bytes = curr_bytes - st["prev_bytes"]
+                if delta_bytes < 0:
+                    # Licznik zresetowany w playbooku
+                    delta_bytes = 0
 
-    def start(self):
-        t_route = threading.Thread(target=self.run, daemon=True)
-        t_route.start()
-        if self.mode != "famtar":
-            return [t_route]
-        t_digest = threading.Thread(target=self.listen_digests, daemon=True)
-        t_digest.start()
-        return [t_route, t_digest]
+                instant_rate = (delta_bytes * 8.0) / dt
+                st["ewma_rate"] = alpha * instant_rate + (1.0 - alpha) * st["ewma_rate"]
+                st["prev_bytes"] = curr_bytes
+                st["prev_time"] = now
 
+                utilization = st["ewma_rate"] / capacity
+                if not st["congested"]:
+                    if utilization >= th_max and (now - st["last_state_change"] >= hold_down):
+                        st["congested"] = True
+                        st["last_state_change"] = now
+                        print(f"[{self.name}] CONGESTION DETECTED on port {port} ({st['ifname']}) "
+                              f"rate={st['ewma_rate']/1e6:.2f}M ({utilization*100:.1f}%) -> setting IS-IS metric to {congested_metric}", flush=True)
+                        self.set_isis_metric(st["ifname"], congested_metric)
+                else:
+                    if utilization < th_min and (now - st["last_state_change"] >= hold_down):
+                        st["congested"] = False
+                        st["last_state_change"] = now
+                        default_m = self.default_metrics.get(st["ifname"], 10)
+                        print(f"[{self.name}] CONGESTION CLEARED on port {port} ({st['ifname']}) "
+                              f"rate={st['ewma_rate']/1e6:.2f}M ({utilization*100:.1f}%) -> restoring IS-IS metric to {default_m}", flush=True)
+                        self.set_isis_metric(st["ifname"], default_m)
 
-ROUTERS = [
-    {
-        "name": "r1",
-        "grpc_addr": "172.20.20.4:9559",
-        "device_id": 1,
-        "netns": "clab-p4-basic-lab-r1",
-        "port_map": {
-            "eth1": 1,  # port to h1
-            "eth2": 2,  # port to r2
-            "eth3": 3,  # port to r3
-        },
-        "default_metrics": {
-            "eth2": 10,
-            "eth3": 20,
-        },
-        "dmac": {
-            1: ("00:00:00:00:01:01", "00:00:00:00:00:01"),  # h1:eth1
-            2: ("00:00:00:00:00:21", "00:00:00:00:00:12"),  # r2:eth1
-            3: ("00:00:00:00:00:31", "00:00:00:00:00:13"),  # r3:eth1
-        },
-    },
-    {
-        "name": "r2",
-        "grpc_addr": "172.20.20.5:9559",
-        "device_id": 2,
-        "netns": "clab-p4-basic-lab-r2",
-        "port_map": {
-            "eth1": 1,  # port to r1
-            "eth2": 2,  # port to r4
-        },
-        "default_metrics": {
-            "eth1": 10,
-            "eth2": 10,
-        },
-        "dmac": {
-            1: ("00:00:00:00:00:12", "00:00:00:00:00:21"),  # r1:eth2
-            2: ("00:00:00:00:00:42", "00:00:00:00:00:24"),  # r4:eth2
-        },
-    },
-    {
-        "name": "r3",
-        "grpc_addr": "172.20.20.6:9559",
-        "device_id": 3,
-        "netns": "clab-p4-basic-lab-r3",
-        "port_map": {
-            "eth1": 1,  # port to r1
-            "eth2": 2,  # port to r4
-        },
-        "default_metrics": {
-            "eth1": 20,
-            "eth2": 20,
-        },
-        "dmac": {
-            1: ("00:00:00:00:00:13", "00:00:00:00:00:31"),  # r1:eth3
-            2: ("00:00:00:00:00:43", "00:00:00:00:00:34"),  # r4:eth3
-        },
-    },
-    {
-        "name": "r4",
-        "grpc_addr": "172.20.20.7:9559",
-        "device_id": 4,
-        "netns": "clab-p4-basic-lab-r4",
-        "port_map": {
-            "eth1": 1,  # port to h2
-            "eth2": 2,  # port to r2
-            "eth3": 3,  # port to r3
-        },
-        "default_metrics": {
-            "eth2": 10,
-            "eth3": 20,
-        },
-        "dmac": {
-            1: ("00:00:00:00:02:02", "00:00:00:00:00:04"),  # h2:eth1
-            2: ("00:00:00:00:00:24", "00:00:00:00:00:42"),  # r2:eth2
-            3: ("00:00:00:00:00:34", "00:00:00:00:00:43"),  # r3:eth2
-        },
-    },
-]
-
-ELECTION_ID = (0, 1)
-P4INFO_PATH = "basic_forwarding.p4info.txtpb"
-BIN_PATH = "basic_forwarding.json"
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--router", required=True, choices=[r["name"] for r in ROUTERS],
-                        help="Router name to run (r1, r2, r3, r4)")
+    parser.add_argument("--config", required=True, help="Path to router YAML config")
     parser.add_argument("--mode", choices=["famtar", "ecmp"], default="famtar")
     args = parser.parse_args()
-    print(f"[*] controller starting for {args.router} (mode: {args.mode})", flush=True)
+
+    with open(args.config, "r") as f:
+        conf = yaml.safe_load(f)
+
+    print(f"[*] controller starting for {conf['name']} (mode: {args.mode}) from {args.config}", flush=True)
 
     sh.global_options["verbose"] = False
-
-    conf = next(r for r in ROUTERS if r["name"] == args.router)
     router = P4Router(conf, mode=args.mode)
 
     t_route = threading.Thread(target=router.run, daemon=True)
@@ -332,12 +276,13 @@ def main():
 
     threads = [t_route]
     if router.mode == "famtar":
-        t_digest = threading.Thread(target=router.listen_digests, daemon=True)
-        t_digest.start()
-        threads.append(t_digest)
+        t_poll = threading.Thread(target=router.poll_traffic_loop, daemon=True)
+        t_poll.start()
+        threads.append(t_poll)
 
     for t in threads:
         t.join()
+
 
 if __name__ == "__main__":
     main()

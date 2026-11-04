@@ -36,9 +36,7 @@
         register_reset MyIngress.reg_egress_port
         register_reset MyIngress.reg_saved_ttl
         register_reset MyIngress.reg_timestamp
-        register_reset MyIngress.reg_port_bytes
-        register_reset MyIngress.reg_port_last_ts
-        register_reset MyIngress.reg_port_congested
+        counter_reset MyIngress.port_bytes_counter
         EOF
         done
       args:
