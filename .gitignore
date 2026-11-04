@@ -4,6 +4,7 @@ __pycache__/
 clab-*/
 
 results/
+logs/
 
 basic_forwarding.json
 basic_forwarding.p4info.txtpb

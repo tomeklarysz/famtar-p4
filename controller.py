@@ -5,8 +5,6 @@ import subprocess
 from pyroute2 import NetNS
 import p4runtime_sh.shell as sh
 
-p4_lock = threading.Lock()
-
 class P4Router:
     def __init__(self, conf, mode="famtar"):
         self.mode = mode
@@ -26,42 +24,31 @@ class P4Router:
     def ifname_from_port(self, port):
         return next((name for name, p in self.port_map.items() if p == port), None)
 
-    def init_p4(self, first=False):
-        with p4_lock:
-            if first:
-                sh.setup(
-                    device_id=self.device_id,
-                    grpc_addr=self.grpc_addr,
-                    election_id=ELECTION_ID,
-                    config=sh.FwdPipeConfig(P4INFO_PATH, BIN_PATH),
-                    verbose=False,
-                )
-                self.client = sh.client
-            else:
-                self.client = sh.P4RuntimeClient(
-                    device_id=self.device_id,
-                    grpc_addr=self.grpc_addr,
-                    election_id=ELECTION_ID,
-                )
-                self.client.set_fwd_pipe_config(P4INFO_PATH, BIN_PATH)
+    def init_p4(self):
+        sh.setup(
+            device_id=self.device_id,
+            grpc_addr=self.grpc_addr,
+            election_id=ELECTION_ID,
+            config=sh.FwdPipeConfig(P4INFO_PATH, BIN_PATH),
+            verbose=False,
+        )
+        self.client = sh.client
+        sh.global_options["verbose"] = False
 
-            sh.client = self.client
-            sh.global_options["verbose"] = False
+        for port, (dst_mac, src_mac) in self.dmac.items():
+            te = sh.TableEntry("MyIngress.dmac_table")(action="MyIngress.set_dmac")
+            te.match["standard_metadata.egress_spec"] = str(port)
+            te.action["dst_mac"] = dst_mac
+            te.action["src_mac"] = src_mac
+            te.insert()
+            print(f"[{self.name}] dmac: port {port} -> dst {dst_mac}, src {src_mac}", flush=True)
 
-            for port, (dst_mac, src_mac) in self.dmac.items():
-                te = sh.TableEntry("MyIngress.dmac_table")(action="MyIngress.set_dmac")
-                te.match["standard_metadata.egress_spec"] = str(port)
-                te.action["dst_mac"] = dst_mac
-                te.action["src_mac"] = src_mac
-                te.insert()
-                print(f"[{self.name}] dmac: port {port} -> dst {dst_mac}, src {src_mac}", flush=True)
-
-            de = sh.DigestEntry("congestion_digest_t")
-            de.max_timeout_ns = 0
-            de.max_list_size = 1
-            de.ack_timeout_ns = 0
-            de.insert()
-            print(f"[{self.name}] DigestEntry installed for congestion_digest_t", flush=True)
+        de = sh.DigestEntry("congestion_digest_t")
+        de.max_timeout_ns = 0
+        de.max_list_size = 1
+        de.ack_timeout_ns = 0
+        de.insert()
+        print(f"[{self.name}] DigestEntry installed for congestion_digest_t", flush=True)
 
     def run(self):
         # flags=0: do not create a new empty netns if the name is wrong
@@ -146,56 +133,50 @@ class P4Router:
             self.update_p4_ecmp_route(prefix, p4_ports)
             return
         p4_port = p4_ports[0]
-        with p4_lock:
-            sh.client = self.client
-            te = sh.TableEntry("MyIngress.ipv4_lpm")(action="MyIngress.set_nhop")
-            te.match["hdr.ipv4.dstAddr"] = prefix
-            te.action["port"] = str(p4_port)
-            try:
-                te.insert()
-                print(f"[{self.name}] P4 route added: {prefix} -> port {p4_port}", flush=True)
-            except Exception:
-                te.modify()
-                print(f"[{self.name}] P4 route modified: {prefix} -> port {p4_port}", flush=True)
+        te = sh.TableEntry("MyIngress.ipv4_lpm")(action="MyIngress.set_nhop")
+        te.match["hdr.ipv4.dstAddr"] = prefix
+        te.action["port"] = str(p4_port)
+        try:
+            te.insert()
+            print(f"[{self.name}] P4 route added: {prefix} -> port {p4_port}", flush=True)
+        except Exception:
+            te.modify()
+            print(f"[{self.name}] P4 route modified: {prefix} -> port {p4_port}", flush=True)
 
     def update_p4_ecmp_route(self, prefix, p4_ports):
         count = len(p4_ports)
         group_id = self.ecmp_groups.setdefault(prefix, len(self.ecmp_groups) + 1)
-        with p4_lock:
-            sh.client = self.client
-            # offsets >= count are never hit (hash is taken modulo count),
-            # so stale entries from a bigger group can stay in the table
-            for offset, port in enumerate(p4_ports):
-                te = sh.TableEntry("MyIngress.ecmp_nhop")(action="MyIngress.set_nhop")
-                te.match["meta.ecmp_group_id"] = str(group_id)
-                te.match["meta.ecmp_offset"] = str(offset)
-                te.action["port"] = str(port)
-                try:
-                    te.insert()
-                except Exception:
-                    te.modify()
-
-            te = sh.TableEntry("MyIngress.ipv4_lpm")(action="MyIngress.set_ecmp_group")
-            te.match["hdr.ipv4.dstAddr"] = prefix
-            te.action["group_id"] = str(group_id)
-            te.action["count"] = str(count)
+        # offsets >= count are never hit (hash is taken modulo count),
+        # so stale entries from a bigger group can stay in the table
+        for offset, port in enumerate(p4_ports):
+            te = sh.TableEntry("MyIngress.ecmp_nhop")(action="MyIngress.set_nhop")
+            te.match["meta.ecmp_group_id"] = str(group_id)
+            te.match["meta.ecmp_offset"] = str(offset)
+            te.action["port"] = str(port)
             try:
                 te.insert()
-                print(f"[{self.name}] P4 ECMP route added: {prefix} -> ports {p4_ports} (group {group_id})", flush=True)
             except Exception:
                 te.modify()
-                print(f"[{self.name}] P4 ECMP route modified: {prefix} -> ports {p4_ports} (group {group_id})", flush=True)
+
+        te = sh.TableEntry("MyIngress.ipv4_lpm")(action="MyIngress.set_ecmp_group")
+        te.match["hdr.ipv4.dstAddr"] = prefix
+        te.action["group_id"] = str(group_id)
+        te.action["count"] = str(count)
+        try:
+            te.insert()
+            print(f"[{self.name}] P4 ECMP route added: {prefix} -> ports {p4_ports} (group {group_id})", flush=True)
+        except Exception:
+            te.modify()
+            print(f"[{self.name}] P4 ECMP route modified: {prefix} -> ports {p4_ports} (group {group_id})", flush=True)
 
     def delete_p4_route(self, prefix):
-        with p4_lock:
-            sh.client = self.client
-            te = sh.TableEntry("MyIngress.ipv4_lpm")
-            te.match["hdr.ipv4.dstAddr"] = prefix
-            try:
-                te.delete()
-                print(f"[{self.name}] P4 route deleted: {prefix}", flush=True)
-            except Exception as e:
-                print(f"[{self.name}] Error deleting P4 route {prefix}: {e}", flush=True)
+        te = sh.TableEntry("MyIngress.ipv4_lpm")
+        te.match["hdr.ipv4.dstAddr"] = prefix
+        try:
+            te.delete()
+            print(f"[{self.name}] P4 route deleted: {prefix}", flush=True)
+        except Exception as e:
+            print(f"[{self.name}] Error deleting P4 route {prefix}: {e}", flush=True)
 
     def listen_digests(self):
         print(f"[{self.name}] listening for congestion digests via gRPC stream", flush=True)
@@ -327,30 +308,33 @@ BIN_PATH = "basic_forwarding.json"
 
 def main():
     parser = argparse.ArgumentParser()
+    parser.add_argument("--router", required=True, choices=[r["name"] for r in ROUTERS],
+                        help="Router name to run (r1, r2, r3, r4)")
     parser.add_argument("--mode", choices=["famtar", "ecmp"], default="famtar")
     args = parser.parse_args()
-    print(f"[*] controller mode: {args.mode}", flush=True)
+    print(f"[*] controller starting for {args.router} (mode: {args.mode})", flush=True)
 
     sh.global_options["verbose"] = False
-    threads = []
 
-    routers = [P4Router(r_conf, mode=args.mode) for r_conf in ROUTERS]
-    for router in routers:
-        t_route = threading.Thread(target=router.run, daemon=True)
-        t_route.start()
-        router.netns_ready.wait()
-        threads.append(t_route)
+    conf = next(r for r in ROUTERS if r["name"] == args.router)
+    router = P4Router(conf, mode=args.mode)
 
-    for i, router in enumerate(routers):
-        try:
-            router.init_p4(first=(i == 0))
-            router.p4_ready.set()
-            if router.mode == "famtar":
-                t_digest = threading.Thread(target=router.listen_digests, daemon=True)
-                t_digest.start()
-                threads.append(t_digest)
-        except Exception as e:
-            print(f"Error initializing router {router.name}: {e}", flush=True)
+    t_route = threading.Thread(target=router.run, daemon=True)
+    t_route.start()
+    router.netns_ready.wait()
+
+    try:
+        router.init_p4()
+        router.p4_ready.set()
+    except Exception as e:
+        print(f"Error initializing router {router.name}: {e}", flush=True)
+        return
+
+    threads = [t_route]
+    if router.mode == "famtar":
+        t_digest = threading.Thread(target=router.listen_digests, daemon=True)
+        t_digest.start()
+        threads.append(t_digest)
 
     for t in threads:
         t.join()

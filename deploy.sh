@@ -11,8 +11,15 @@ echo "[2/3] starting containerlab..."
 sudo containerlab destroy --topo topology.clab.yaml 2>/dev/null || true
 sudo containerlab deploy --topo topology.clab.yaml
 
-echo "[3/3] starting control plane (Python)..."
+echo "[3/3] starting control plane (Python per router)..."
 sleep 2
-sudo GRPC_VERBOSITY=ERROR venv/bin/python3 controller.py --mode "${1:-famtar}"
+mkdir -p logs
+for r in r1 r2 r3 r4; do
+  sudo GRPC_VERBOSITY=ERROR venv/bin/python3 controller.py --router "$r" --mode "${1:-famtar}" \
+    > "logs/$r.log" 2>&1 &
+done
 
-echo "[*] environment ready. You can now run tests or interact with the network."
+trap 'echo ""; echo "[*] stopping controllers..."; sudo pkill -f "controller.py --router" || true' INT TERM EXIT
+
+echo "[*] environment ready. Logs in logs/r*.log (Ctrl+C stops all controllers)"
+tail -q -f logs/r*.log
