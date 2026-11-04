@@ -1,0 +1,24 @@
+name: r1
+device_id: 1
+grpc_addr: 172.20.20.4:9559
+netns: clab-p4-basic-lab-r1
+frr_container: clab-p4-basic-lab-r1-frr
+port_map:
+  eth1: 1
+  eth2: 2
+  eth3: 3
+default_metrics:
+  eth2: 10
+  eth3: 20
+dmac:
+  1: ["00:00:00:00:01:01", "00:00:00:00:00:01"]
+  2: ["00:00:00:00:00:21", "00:00:00:00:00:12"]
+  3: ["00:00:00:00:00:31", "00:00:00:00:00:13"]
+congestion:
+  poll_interval_s: 0.1
+  capacity_bps: 10000000
+  th_max: 0.90
+  th_min: 0.70
+  ewma_alpha: 0.5
+  hold_down_s: 2.0
+  congested_metric: 1000

@@ -1,0 +1,22 @@
+name: r3
+device_id: 3
+grpc_addr: 172.20.20.6:9559
+netns: clab-p4-basic-lab-r3
+frr_container: clab-p4-basic-lab-r3-frr
+port_map:
+  eth1: 1
+  eth2: 2
+default_metrics:
+  eth1: 20
+  eth2: 20
+dmac:
+  1: ["00:00:00:00:00:13", "00:00:00:00:00:31"]
+  2: ["00:00:00:00:00:43", "00:00:00:00:00:34"]
+congestion:
+  poll_interval_s: 0.1
+  capacity_bps: 10000000
+  th_max: 0.90
+  th_min: 0.70
+  ewma_alpha: 0.5
+  hold_down_s: 2.0
+  congested_metric: 1000
