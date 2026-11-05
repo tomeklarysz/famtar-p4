@@ -52,6 +52,15 @@ class P4Router:
             te.insert()
             print(f"[{self.name}] dmac: port {port} -> dst {dst_mac}, src {src_mac}", flush=True)
 
+        for port in self.port_map.values():
+            member = sh.ActionProfileMember("MyIngress.ecmp_selector")(member_id=port, action="MyIngress.set_nhop")
+            member.action["port"] = str(port)
+            try:
+                member.insert()
+            except Exception:
+                member.modify()
+            print(f"[{self.name}] member: port {port} (member_id {port})", flush=True)
+
     def run(self):
         with NetNS(self.netns, flags=0) as ipr:
             ipr.bind()
@@ -130,33 +139,29 @@ class P4Router:
             self.update_p4_ecmp_route(prefix, p4_ports)
             return
         p4_port = p4_ports[0]
-        te = sh.TableEntry("MyIngress.ipv4_lpm")(action="MyIngress.set_nhop")
+        te = sh.TableEntry("MyIngress.ipv4_lpm")
         te.match["hdr.ipv4.dstAddr"] = prefix
-        te.action["port"] = str(p4_port)
+        te.member_id = p4_port
         try:
             te.insert()
-            print(f"[{self.name}] P4 route added: {prefix} -> port {p4_port}", flush=True)
+            print(f"[{self.name}] P4 route added: {prefix} -> port {p4_port} (member {p4_port})", flush=True)
         except Exception:
             te.modify()
-            print(f"[{self.name}] P4 route modified: {prefix} -> port {p4_port}", flush=True)
+            print(f"[{self.name}] P4 route modified: {prefix} -> port {p4_port} (member {p4_port})", flush=True)
 
     def update_p4_ecmp_route(self, prefix, p4_ports):
-        count = len(p4_ports)
-        group_id = self.ecmp_groups.setdefault(prefix, len(self.ecmp_groups) + 1)
-        for offset, port in enumerate(p4_ports):
-            te = sh.TableEntry("MyIngress.ecmp_nhop")(action="MyIngress.set_nhop")
-            te.match["meta.ecmp_group_id"] = str(group_id)
-            te.match["meta.ecmp_offset"] = str(offset)
-            te.action["port"] = str(port)
-            try:
-                te.insert()
-            except Exception:
-                te.modify()
+        group_id = self.ecmp_groups.setdefault(prefix, len(self.ecmp_groups) + 100)
+        group = sh.ActionProfileGroup("MyIngress.ecmp_selector")(group_id=group_id)
+        for port in p4_ports:
+            group.add(port)
+        try:
+            group.insert()
+        except Exception:
+            group.modify()
 
-        te = sh.TableEntry("MyIngress.ipv4_lpm")(action="MyIngress.set_ecmp_group")
+        te = sh.TableEntry("MyIngress.ipv4_lpm")
         te.match["hdr.ipv4.dstAddr"] = prefix
-        te.action["group_id"] = str(group_id)
-        te.action["count"] = str(count)
+        te.group_id = group_id
         try:
             te.insert()
             print(f"[{self.name}] P4 ECMP route added: {prefix} -> ports {p4_ports} (group {group_id})", flush=True)
