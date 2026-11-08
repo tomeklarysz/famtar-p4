@@ -49,7 +49,10 @@ class P4Router:
             te.match["standard_metadata.egress_spec"] = str(port)
             te.action["dst_mac"] = dst_mac
             te.action["src_mac"] = src_mac
-            te.insert()
+            try:
+                te.insert()
+            except Exception:
+                te.modify()
             print(f"[{self.name}] dmac: port {port} -> dst {dst_mac}, src {src_mac}", flush=True)
 
         for port in self.port_map.values():
@@ -135,7 +138,7 @@ class P4Router:
         }
 
     def update_p4_route(self, prefix, p4_ports):
-        if self.mode == "ecmp" and len(p4_ports) > 1:
+        if len(p4_ports) > 1:
             self.update_p4_ecmp_route(prefix, p4_ports)
             return
         p4_port = p4_ports[0]

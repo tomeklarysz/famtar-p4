@@ -6,7 +6,9 @@ const bit<8>  PROTO_TCP = 6;
 const bit<8>  PROTO_UDP = 17;
 
 const bit<32> FFT_SIZE       = 65536;
-const bit<48> FFT_TIMEOUT_US = 30000000;
+const bit<48> FFT_TIMEOUT_US = 2000000;
+const bit<9>  DROP_PORT      = 511;
+const bit<9>  MAX_PORTS      = 16;
 
 header ethernet_t {
     bit<48> dstAddr;
@@ -62,8 +64,9 @@ struct metadata {
     bit<16> l4_dst_port;
     bit<32> fft_index;
     bit<32> flow_signature;
-    bit<1>  fft_hit;
-    bit<1>  cache_fft;
+    bit<1>  fft_hit;    // 1 = FFT hit (after LPM do not write to FFT)
+    bit<1>  cache_fft;  // 1 = miss on a free/expired slot (after LPM, write to FFT)
+    // When both flags == 0: collision with an active flow or non-TCP/UDP (LPM without overwriting FFT)
 }
 
 parser MyParser(packet_in packet,
@@ -133,7 +136,7 @@ control MyIngress(inout headers hdr,
         hdr.ethernet.srcAddr = src_mac;
     }
 
-    action_selector(HashAlgorithm.crc16, 32w1024, 32w16) ecmp_selector;
+    action_selector(HashAlgorithm.crc16, 1024, 16) ecmp_selector;
 
     table ipv4_lpm {
         key = {
@@ -176,10 +179,12 @@ control MyIngress(inout headers hdr,
             return;
         }
 
-        meta.fft_hit       = 0;
-        meta.cache_fft     = 0;
-        meta.l4_src_port   = 0;
-        meta.l4_dst_port   = 0;
+        meta.fft_hit        = 0;
+        meta.cache_fft      = 0;
+        meta.l4_src_port    = 0;
+        meta.l4_dst_port    = 0;
+        meta.fft_index      = 0;
+        meta.flow_signature = 0;
 
         bool is_tcp_udp = false;
 
@@ -246,7 +251,7 @@ control MyIngress(inout headers hdr,
             lpm_hit = ipv4_lpm.apply().hit;
         }
 
-        if (meta.cache_fft == 1 && lpm_hit && standard_metadata.egress_spec != 511) {
+        if (meta.cache_fft == 1 && lpm_hit && standard_metadata.egress_spec != DROP_PORT) {
             reg_signature.write(meta.fft_index,   meta.flow_signature);
             reg_egress_port.write(meta.fft_index, standard_metadata.egress_spec);
             reg_saved_ttl.write(meta.fft_index,   hdr.ipv4.ttl);
@@ -256,7 +261,7 @@ control MyIngress(inout headers hdr,
 
         dmac_table.apply();
 
-        if (standard_metadata.egress_spec < 16) {
+        if (standard_metadata.egress_spec < MAX_PORTS) {
             port_bytes_counter.count((bit<32>)standard_metadata.egress_spec);
         }
 

@@ -13,13 +13,9 @@ sudo containerlab deploy --topo topology.clab.yaml
 
 echo "[3/3] starting control plane (Python per router)..."
 sleep 2
-mkdir -p logs
-for r in r1 r2 r3 r4; do
-  sudo GRPC_VERBOSITY=ERROR venv/bin/python3 controller.py --config "configs/$r/controller.yaml" --mode "${1:-famtar}" \
-    > "logs/$r.log" 2>&1 &
-done
+./scripts/controllers.sh restart "${1:-famtar}"
 
-trap 'echo ""; echo "[*] stopping controllers..."; sudo pkill -f "controller.py --config" || true' INT TERM EXIT
+trap 'echo ""; ./scripts/controllers.sh stop || true' INT TERM EXIT
 
 echo "[*] environment ready. Logs in logs/r*.log (Ctrl+C stops all controllers)"
 tail -q -f logs/r*.log

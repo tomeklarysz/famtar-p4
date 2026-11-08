@@ -17,6 +17,6 @@ congestion:
   capacity_bps: 10000000
   th_max: 0.90
   th_min: 0.70
-  ewma_alpha: 0.5
+  ewma_alpha: 0.2
   hold_down_s: 2.0
   congested_metric: 1000
