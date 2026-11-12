@@ -27,8 +27,6 @@ class P4Router:
         self.default_metrics = conf.get("default_metrics", {})
         self.iface_map = {}
         self.client = None
-        self.netns_ready = threading.Event()
-        self.p4_ready = threading.Event()
 
     def ifname_from_port(self, port):
         return next((name for name, p in self.port_map.items() if p == port), None)
@@ -67,8 +65,6 @@ class P4Router:
     def run(self):
         with NetNS(self.netns, flags=0) as ipr:
             ipr.bind()
-            self.netns_ready.set()
-            self.p4_ready.wait()
             print(f"[{self.name}] listening on {self.netns}", flush=True)
 
             for link in ipr.get_links():
@@ -271,16 +267,14 @@ def main():
     sh.global_options["verbose"] = False
     router = P4Router(conf, mode=args.mode)
 
-    t_route = threading.Thread(target=router.run, daemon=True)
-    t_route.start()
-    router.netns_ready.wait()
-
     try:
         router.init_p4()
-        router.p4_ready.set()
     except Exception as e:
         print(f"Error initializing router {router.name}: {e}", flush=True)
         return
+
+    t_route = threading.Thread(target=router.run, daemon=True)
+    t_route.start()
 
     threads = [t_route]
     if router.mode == "famtar":
