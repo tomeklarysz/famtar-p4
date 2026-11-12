@@ -3,6 +3,7 @@ import argparse
 import json
 import os
 import re
+import sys
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -623,9 +624,209 @@ def handle_nobel(args):
         plot_nobel_comparison(args.scenario, e_data, f_data, ts_cmp, bar_cmp)
 
 
+def parse_tcpdump_tt(filepath):
+    pkts = []
+    if not os.path.exists(filepath):
+        return pkts
+    pat = re.compile(r"^(\d+\.\d+)\s+IP\s+.*length\s+(\d+)")
+    with open(filepath, "r", errors="ignore") as f:
+        for line in f:
+            m = pat.search(line)
+            if m:
+                pkts.append((float(m.group(1)), int(m.group(2))))
+    return pkts
+
+
+def handle_pareto(args):
+    rx_json_path = os.path.join(args.dir, "receiver_stats.json")
+    if not os.path.exists(rx_json_path):
+        print(f"Brak pliku {rx_json_path}!", file=sys.stderr)
+        return
+
+    with open(rx_json_path) as f:
+        rx_data = json.load(f)
+
+    timeseries = rx_data.get("timeseries", [])
+    summary = rx_data.get("summary", {})
+    w_info = summary.get("window_20_230", {})
+
+    # Parse path utilization via tcpdump on r2 and r3
+    r2_pkts = parse_tcpdump_tt(os.path.join(args.dir, "tcpdump_r2.txt"))
+    r3_pkts = parse_tcpdump_tt(os.path.join(args.dir, "tcpdump_r3.txt"))
+
+    all_ts = [p[0] for p in r2_pkts + r3_pkts]
+    t0 = min(all_ts) if all_ts else 0.0
+
+    r2_series, r3_series = {}, {}
+    for t, length in r2_pkts:
+        sec = int(t - t0)
+        r2_series[sec] = r2_series.get(sec, 0) + length
+    for t, length in r3_pkts:
+        sec = int(t - t0)
+        r3_series[sec] = r3_series.get(sec, 0) + length
+
+    secs = [x["sec"] for x in timeseries]
+    max_sec = max(secs) if secs else 1
+
+    r2_mbps_list = [round((r2_series.get(s, 0) * 8.0) / 1e6, 3) for s in secs]
+    r3_mbps_list = [round((r3_series.get(s, 0) * 8.0) / 1e6, 3) for s in secs]
+    tot_mbps_list = [x["mbps"] for x in timeseries]
+
+    out_summary = {
+        "scenario": args.scenario,
+        "mode": args.mode,
+        "total_flows": summary.get("total_flows", 0),
+        "duration_sec": summary.get("duration_sec", 0.0),
+        "overall_mbps": summary.get("overall_mbps", 0.0),
+        "loss_pct": summary.get("loss_pct", 0.0),
+        "total_packets": summary.get("total_packets", 0),
+        "total_lost": summary.get("total_lost", 0),
+        "window_20_230": w_info,
+        "timeseries": timeseries,
+        "r2_mbps": r2_mbps_list,
+        "r3_mbps": r3_mbps_list,
+    }
+
+    summary_file = os.path.join(args.dir, "summary.json")
+    with open(summary_file, "w") as f:
+        json.dump(out_summary, f, indent=2)
+
+    single_plot = os.path.join(args.dir, f"pareto_throughput_{args.mode}.png")
+    fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(9, 6.5), dpi=200, sharex=True)
+
+    ax1.plot(secs, tot_mbps_list, color="#4c72b0", linewidth=1.8, label="Odebrany Throughput (h2)")
+    ax1.axhline(10.0, color="#c44e52", linestyle="--", linewidth=1.2, label="Pojemność 1 łącza (10 Mbit/s)")
+    ax1.axhline(20.0, color="#2ca02c", linestyle=":", linewidth=1.2, label="Pojemność 2 łączy (20 Mbit/s)")
+    if max_sec >= 30:
+        ax1.axvspan(20, min(230, max_sec), color="gray", alpha=0.15, label="Okno pomiarowe [20, 230]s")
+    ax1.set_title(f"Benchmark Pareto (500 flows) — Tryb: {args.mode.upper()}", fontsize=11.5, fontweight="bold")
+    ax1.set_ylabel("Przepustowość [Mbit/s]")
+    ax1.grid(True, linestyle="--", alpha=0.4)
+    ax1.legend(loc="upper right", fontsize=8.5)
+
+    ax2.plot(secs, r2_mbps_list, color="#dd8452", linewidth=1.6, label="Ścieżka r2 (Link 1)")
+    ax2.plot(secs, r3_mbps_list, color="#55a868", linewidth=1.6, label="Ścieżka r3 (Link 2)")
+    ax2.axhline(10.0, color="#c44e52", linestyle="--", linewidth=1.0, alpha=0.7)
+    ax2.set_xlabel("Czas [s]")
+    ax2.set_ylabel("Ruch na łączu [Mbit/s]")
+    ax2.grid(True, linestyle="--", alpha=0.4)
+    ax2.legend(loc="upper right", fontsize=8.5)
+
+    fig.tight_layout()
+    fig.savefig(single_plot)
+    plt.close(fig)
+
+    print(
+        f"[{args.scenario}:{args.mode}] "
+        f"Flows={summary.get('total_flows')} Duration={summary.get('duration_sec')}s "
+        f"Overall={summary.get('overall_mbps')}Mbit/s "
+        f"Window[20,230]={w_info.get('avg_mbps')}Mbit/s Loss={w_info.get('loss_pct')}% "
+        f"TotalLost={summary.get('total_lost')}pkts"
+    )
+
+    base_results = os.path.dirname(args.dir.rstrip("/"))
+    ecmp_json = os.path.join(base_results, f"{args.scenario}_ecmp", "summary.json")
+    famtar_json = os.path.join(base_results, f"{args.scenario}_famtar", "summary.json")
+
+    if os.path.exists(ecmp_json) and os.path.exists(famtar_json):
+        with open(ecmp_json) as f1, open(famtar_json) as f2:
+            e_data, f_data = json.load(f1), json.load(f2)
+
+        cmp_ts_plot = os.path.join(base_results, f"{args.scenario}_comparison_throughput.png")
+        fig, ax = plt.subplots(figsize=(9, 4.5), dpi=200)
+
+        e_ts = e_data.get("timeseries", [])
+        f_ts = f_data.get("timeseries", [])
+        ex = [p["sec"] for p in e_ts]
+        ey = [p["mbps"] for p in e_ts]
+        fx = [p["sec"] for p in f_ts]
+        fy = [p["mbps"] for p in f_ts]
+
+        e_win = e_data.get("window_20_230", {}).get("avg_mbps", e_data.get("overall_mbps", 0))
+        f_win = f_data.get("window_20_230", {}).get("avg_mbps", f_data.get("overall_mbps", 0))
+
+        ax.plot(ex, ey, color="#c44e52", linewidth=1.6, alpha=0.85,
+                label=f"Klasyczny ECMP (Okno [20,230]s: {e_win:.2f} Mbit/s)")
+        ax.plot(fx, fy, color="#4c72b0", linewidth=1.8,
+                label=f"FAMTAR (Okno [20,230]s: {f_win:.2f} Mbit/s)")
+        ax.axhline(10.0, color="gray", linestyle="--", linewidth=1.1, label="Pojemność 1 łącza (10 Mbit/s)")
+        ax.axhline(20.0, color="#2ca02c", linestyle=":", linewidth=1.1, label="Maks. pojemność 2 łączy (20 Mbit/s)")
+        max_cmp_sec = max(ex + fx) if (ex + fx) else 1
+        if max_cmp_sec >= 30:
+            ax.axvspan(20, min(230, max_cmp_sec), color="gray", alpha=0.12, label="Okno ewaluacji [20, 230]s")
+
+        ax.set_title("Benchmark 500 przepływów Pareto: Przepustowość ECMP vs FAMTAR", fontsize=11.5, fontweight="bold")
+        ax.set_xlabel("Czas [s]")
+        ax.set_ylabel("Przepustowość [Mbit/s]")
+        ax.grid(True, linestyle="--", alpha=0.4)
+        ax.legend(loc="upper right", fontsize=8.5)
+        fig.tight_layout()
+        fig.savefig(cmp_ts_plot)
+        plt.close(fig)
+
+        cmp_paths_plot = os.path.join(base_results, f"{args.scenario}_comparison_paths.png")
+        fig, (ax_e, ax_f) = plt.subplots(1, 2, figsize=(12, 4.5), dpi=200, sharey=True)
+
+        ax_e.plot(ex, e_data.get("r2_mbps", []), color="#dd8452", label="Ścieżka r2")
+        ax_e.plot(ex, e_data.get("r3_mbps", []), color="#55a868", label="Ścieżka r3")
+        ax_e.axhline(10.0, color="#c44e52", linestyle="--", linewidth=1.2, label="Limit 10 Mbit/s")
+        ax_e.set_title("Klasyczny ECMP (Brak reakcji na zator)", fontweight="bold")
+        ax_e.set_xlabel("Czas [s]")
+        ax_e.set_ylabel("Obciążenie ścieżki [Mbit/s]")
+        ax_e.grid(True, linestyle="--", alpha=0.4)
+        ax_e.legend(loc="upper right", fontsize=8)
+
+        ax_f.plot(fx, f_data.get("r2_mbps", []), color="#dd8452", label="Ścieżka r2")
+        ax_f.plot(fx, f_data.get("r3_mbps", []), color="#55a868", label="Ścieżka r3")
+        ax_f.axhline(10.0, color="#c44e52", linestyle="--", linewidth=1.2, label="Limit 10 Mbit/s")
+        ax_f.set_title("FAMTAR (Dynamiczne odciążanie zatorów)", fontweight="bold")
+        ax_f.set_xlabel("Czas [s]")
+        ax_f.grid(True, linestyle="--", alpha=0.4)
+        ax_f.legend(loc="upper right", fontsize=8)
+
+        fig.tight_layout()
+        fig.savefig(cmp_paths_plot)
+        plt.close(fig)
+
+        cmp_bars_plot = os.path.join(base_results, f"{args.scenario}_comparison_summary.png")
+        fig, (b_ax1, b_ax2) = plt.subplots(1, 2, figsize=(9, 4.2), dpi=200)
+
+        modes = ["Klasyczny ECMP", "FAMTAR"]
+        throughputs = [e_win, f_win]
+        losses = [
+            e_data.get("window_20_230", {}).get("loss_pct", e_data.get("loss_pct", 0.0)),
+            f_data.get("window_20_230", {}).get("loss_pct", f_data.get("loss_pct", 0.0))
+        ]
+
+        colors = ["#c44e52", "#4c72b0"]
+        b1 = b_ax1.bar(modes, throughputs, color=colors, width=0.55, alpha=0.85)
+        b_ax1.set_ylabel("Przepustowość [Mbit/s]")
+        b_ax1.set_title("Średnia przepustowość (Okno [20, 230]s)", fontsize=10, fontweight="bold")
+        b_ax1.grid(True, linestyle="--", alpha=0.4, axis="y")
+        b_ax1.set_ylim(0, max(throughputs + [10.0]) * 1.25)
+        for rect in b1:
+            h = rect.get_height()
+            b_ax1.annotate(f"{h:.2f} M", xy=(rect.get_x() + rect.get_width() / 2, h),
+                           xytext=(0, 3), textcoords="offset points", ha="center", va="bottom", fontweight="bold")
+
+        b2 = b_ax2.bar(modes, losses, color=colors, width=0.55, alpha=0.85)
+        b_ax2.set_ylabel("Straty pakietów [%]")
+        b_ax2.set_title("Wskaźnik strat pakietów (Loss Rate %)", fontsize=10, fontweight="bold")
+        b_ax2.grid(True, linestyle="--", alpha=0.4, axis="y")
+        b_ax2.set_ylim(0, max(losses + [5.0]) * 1.3)
+        for rect in b2:
+            h = rect.get_height()
+            b_ax2.annotate(f"{h:.2f}%", xy=(rect.get_x() + rect.get_width() / 2, h),
+                           xytext=(0, 3), textcoords="offset points", ha="center", va="bottom", fontweight="bold")
+
+        fig.tight_layout()
+        fig.savefig(cmp_bars_plot)
+        plt.close(fig)
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--type", choices=["throughput", "qos", "nobel"], required=True)
+    parser.add_argument("--type", choices=["throughput", "qos", "pareto", "nobel"], required=True)
     parser.add_argument("--scenario", required=True)
     parser.add_argument("--mode", required=True)
     parser.add_argument("--dir", required=True)
@@ -636,6 +837,8 @@ def main():
 
     if args.type == "throughput":
         handle_throughput(args)
+    elif args.type == "pareto":
+        handle_pareto(args)
     elif args.type == "nobel":
         handle_nobel(args)
     else:
