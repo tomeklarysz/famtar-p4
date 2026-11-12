@@ -1,0 +1,26 @@
+name: zur
+device_id: 11
+thrift_port: 9101
+grpc_addr: 172.20.21.111:9559
+netns: clab-p4-nobel-lab-zur
+frr_container: clab-p4-nobel-lab-zur-frr
+port_map:
+  eth1: 1
+  eth2: 2
+  eth3: 3
+default_metrics:
+  eth1: 36
+  eth2: 22
+  eth3: 14
+dmac:
+  1: ["00:00:00:00:06:02", "00:00:00:00:0b:01"]
+  2: ["00:00:00:00:07:02", "00:00:00:00:0b:02"]
+  3: ["00:00:00:00:0a:03", "00:00:00:00:0b:03"]
+congestion:
+  poll_interval_s: 0.1
+  capacity_bps: 5000000
+  th_max: 0.90
+  th_min: 0.70
+  ewma_alpha: 0.2
+  hold_down_s: 2.0
+  congested_metric: 1000

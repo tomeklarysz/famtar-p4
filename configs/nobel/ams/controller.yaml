@@ -1,0 +1,26 @@
+name: ams
+device_id: 1
+thrift_port: 9091
+grpc_addr: 172.20.21.101:9559
+netns: clab-p4-nobel-lab-ams
+frr_container: clab-p4-nobel-lab-ams-frr
+port_map:
+  eth1: 1
+  eth2: 2
+  eth3: 3
+default_metrics:
+  eth1: 19
+  eth2: 39
+  eth3: 33
+dmac:
+  1: ["00:00:00:00:02:01", "00:00:00:00:01:01"]
+  2: ["00:00:00:00:04:01", "00:00:00:00:01:02"]
+  3: ["00:00:00:00:05:01", "00:00:00:00:01:03"]
+congestion:
+  poll_interval_s: 0.1
+  capacity_bps: 5000000
+  th_max: 0.90
+  th_min: 0.70
+  ewma_alpha: 0.2
+  hold_down_s: 2.0
+  congested_metric: 1000

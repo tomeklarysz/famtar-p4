@@ -1,0 +1,23 @@
+name: mun
+device_id: 8
+thrift_port: 9098
+grpc_addr: 172.20.21.108:9559
+netns: clab-p4-nobel-lab-mun
+frr_container: clab-p4-nobel-lab-mun-frr
+port_map:
+  eth1: 1
+  eth2: 2
+default_metrics:
+  eth1: 31
+  eth2: 35
+dmac:
+  1: ["00:00:00:00:03:04", "00:00:00:00:08:01"]
+  2: ["00:00:00:00:07:01", "00:00:00:00:08:02"]
+congestion:
+  poll_interval_s: 0.1
+  capacity_bps: 5000000
+  th_max: 0.90
+  th_min: 0.70
+  ewma_alpha: 0.2
+  hold_down_s: 2.0
+  congested_metric: 1000

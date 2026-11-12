@@ -1,0 +1,31 @@
+name: par
+device_id: 9
+thrift_port: 9099
+grpc_addr: 172.20.21.109:9559
+netns: clab-p4-nobel-lab-par
+frr_container: clab-p4-nobel-lab-par-frr
+port_map:
+  eth1: 1
+  eth2: 2
+  eth3: 3
+  eth4: 4
+  eth5: 5
+default_metrics:
+  eth2: 26
+  eth3: 35
+  eth4: 38
+  eth5: 39
+dmac:
+  1: ["00:00:00:02:02:02", "00:00:00:00:09:01"]
+  2: ["00:00:00:00:02:03", "00:00:00:00:09:02"]
+  3: ["00:00:00:00:05:02", "00:00:00:00:09:03"]
+  4: ["00:00:00:00:06:01", "00:00:00:00:09:04"]
+  5: ["00:00:00:00:0a:02", "00:00:00:00:09:05"]
+congestion:
+  poll_interval_s: 0.1
+  capacity_bps: 5000000
+  th_max: 0.90
+  th_min: 0.70
+  ewma_alpha: 0.2
+  hold_down_s: 2.0
+  congested_metric: 1000

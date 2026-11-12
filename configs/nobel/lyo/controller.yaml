@@ -1,0 +1,23 @@
+name: lyo
+device_id: 6
+thrift_port: 9096
+grpc_addr: 172.20.21.106:9559
+netns: clab-p4-nobel-lab-lyo
+frr_container: clab-p4-nobel-lab-lyo-frr
+port_map:
+  eth1: 1
+  eth2: 2
+default_metrics:
+  eth1: 38
+  eth2: 36
+dmac:
+  1: ["00:00:00:00:09:04", "00:00:00:00:06:01"]
+  2: ["00:00:00:00:0b:01", "00:00:00:00:06:02"]
+congestion:
+  poll_interval_s: 0.1
+  capacity_bps: 5000000
+  th_max: 0.90
+  th_min: 0.70
+  ewma_alpha: 0.2
+  hold_down_s: 2.0
+  congested_metric: 1000

@@ -1,0 +1,578 @@
+name: p4-nobel-lab
+
+mgmt:
+  network: clab-nobel-mgmt
+  ipv4-subnet: 172.20.21.0/24
+
+topology:
+  nodes:
+    ams:
+      kind: linux
+      image: p4lang/behavioral-model:latest
+      mgmt-ipv4: 172.20.21.101
+      binds:
+        - basic_forwarding.json:/root/basic_forwarding.json
+      sysctls:
+        net.ipv4.ip_forward: 0
+        net.ipv6.conf.all.forwarding: 0
+      exec:
+        - sysctl -qw net.ipv4.ip_forward=0 net.ipv6.conf.all.forwarding=0
+      cmd: >
+        bash -c "sleep 2 &&
+        simple_switch_grpc
+        --thrift-port 9091
+        --device-id 1
+        -i 1@eth1 -i 2@eth2 -i 3@eth3
+        /root/basic_forwarding.json
+        --
+        --grpc-server-addr 0.0.0.0:9559"
+
+    ams-frr:
+      kind: linux
+      image: frrouting/frr:latest
+      network-mode: container:ams
+      binds:
+        - configs/daemons:/etc/frr/daemons
+        - configs/vtysh.conf:/etc/frr/vtysh.conf
+        - configs/nobel/ams/frr.conf:/etc/frr/frr.conf
+      exec:
+        - sysctl -qw net.ipv4.ip_forward=0 net.ipv6.conf.all.forwarding=0
+        - apk add --no-cache tcpdump
+        - iptables -A OUTPUT -p icmp --icmp-type destination-unreachable -j DROP
+        - tc qdisc replace dev eth1 root tbf rate 5mbit burst 16kb latency 50ms
+        - tc qdisc replace dev eth2 root tbf rate 5mbit burst 16kb latency 50ms
+        - tc qdisc replace dev eth3 root tbf rate 5mbit burst 16kb latency 50ms
+
+    bru:
+      kind: linux
+      image: p4lang/behavioral-model:latest
+      mgmt-ipv4: 172.20.21.102
+      binds:
+        - basic_forwarding.json:/root/basic_forwarding.json
+      sysctls:
+        net.ipv4.ip_forward: 0
+        net.ipv6.conf.all.forwarding: 0
+      exec:
+        - sysctl -qw net.ipv4.ip_forward=0 net.ipv6.conf.all.forwarding=0
+      cmd: >
+        bash -c "sleep 2 &&
+        simple_switch_grpc
+        --thrift-port 9092
+        --device-id 2
+        -i 1@eth1 -i 2@eth2 -i 3@eth3
+        /root/basic_forwarding.json
+        --
+        --grpc-server-addr 0.0.0.0:9559"
+
+    bru-frr:
+      kind: linux
+      image: frrouting/frr:latest
+      network-mode: container:bru
+      binds:
+        - configs/daemons:/etc/frr/daemons
+        - configs/vtysh.conf:/etc/frr/vtysh.conf
+        - configs/nobel/bru/frr.conf:/etc/frr/frr.conf
+      exec:
+        - sysctl -qw net.ipv4.ip_forward=0 net.ipv6.conf.all.forwarding=0
+        - apk add --no-cache tcpdump
+        - iptables -A OUTPUT -p icmp --icmp-type destination-unreachable -j DROP
+        - tc qdisc replace dev eth1 root tbf rate 5mbit burst 16kb latency 50ms
+        - tc qdisc replace dev eth2 root tbf rate 5mbit burst 16kb latency 50ms
+        - tc qdisc replace dev eth3 root tbf rate 5mbit burst 16kb latency 50ms
+
+    fra:
+      kind: linux
+      image: p4lang/behavioral-model:latest
+      mgmt-ipv4: 172.20.21.103
+      binds:
+        - basic_forwarding.json:/root/basic_forwarding.json
+      sysctls:
+        net.ipv4.ip_forward: 0
+        net.ipv6.conf.all.forwarding: 0
+      exec:
+        - sysctl -qw net.ipv4.ip_forward=0 net.ipv6.conf.all.forwarding=0
+      cmd: >
+        bash -c "sleep 2 &&
+        simple_switch_grpc
+        --thrift-port 9093
+        --device-id 3
+        -i 1@eth1 -i 2@eth2 -i 3@eth3 -i 4@eth4 -i 5@eth5
+        /root/basic_forwarding.json
+        --
+        --grpc-server-addr 0.0.0.0:9559"
+
+    fra-frr:
+      kind: linux
+      image: frrouting/frr:latest
+      network-mode: container:fra
+      binds:
+        - configs/daemons:/etc/frr/daemons
+        - configs/vtysh.conf:/etc/frr/vtysh.conf
+        - configs/nobel/fra/frr.conf:/etc/frr/frr.conf
+      exec:
+        - sysctl -qw net.ipv4.ip_forward=0 net.ipv6.conf.all.forwarding=0
+        - apk add --no-cache tcpdump
+        - iptables -A OUTPUT -p icmp --icmp-type destination-unreachable -j DROP
+        - tc qdisc replace dev eth2 root tbf rate 5mbit burst 16kb latency 50ms
+        - tc qdisc replace dev eth3 root tbf rate 5mbit burst 16kb latency 50ms
+        - tc qdisc replace dev eth4 root tbf rate 5mbit burst 16kb latency 50ms
+        - tc qdisc replace dev eth5 root tbf rate 5mbit burst 16kb latency 50ms
+
+    ham:
+      kind: linux
+      image: p4lang/behavioral-model:latest
+      mgmt-ipv4: 172.20.21.104
+      binds:
+        - basic_forwarding.json:/root/basic_forwarding.json
+      sysctls:
+        net.ipv4.ip_forward: 0
+        net.ipv6.conf.all.forwarding: 0
+      exec:
+        - sysctl -qw net.ipv4.ip_forward=0 net.ipv6.conf.all.forwarding=0
+      cmd: >
+        bash -c "sleep 2 &&
+        simple_switch_grpc
+        --thrift-port 9094
+        --device-id 4
+        -i 1@eth1 -i 2@eth2
+        /root/basic_forwarding.json
+        --
+        --grpc-server-addr 0.0.0.0:9559"
+
+    ham-frr:
+      kind: linux
+      image: frrouting/frr:latest
+      network-mode: container:ham
+      binds:
+        - configs/daemons:/etc/frr/daemons
+        - configs/vtysh.conf:/etc/frr/vtysh.conf
+        - configs/nobel/ham/frr.conf:/etc/frr/frr.conf
+      exec:
+        - sysctl -qw net.ipv4.ip_forward=0 net.ipv6.conf.all.forwarding=0
+        - apk add --no-cache tcpdump
+        - iptables -A OUTPUT -p icmp --icmp-type destination-unreachable -j DROP
+        - tc qdisc replace dev eth1 root tbf rate 5mbit burst 16kb latency 50ms
+        - tc qdisc replace dev eth2 root tbf rate 5mbit burst 16kb latency 50ms
+
+    lon:
+      kind: linux
+      image: p4lang/behavioral-model:latest
+      mgmt-ipv4: 172.20.21.105
+      binds:
+        - basic_forwarding.json:/root/basic_forwarding.json
+      sysctls:
+        net.ipv4.ip_forward: 0
+        net.ipv6.conf.all.forwarding: 0
+      exec:
+        - sysctl -qw net.ipv4.ip_forward=0 net.ipv6.conf.all.forwarding=0
+      cmd: >
+        bash -c "sleep 2 &&
+        simple_switch_grpc
+        --thrift-port 9095
+        --device-id 5
+        -i 1@eth1 -i 2@eth2
+        /root/basic_forwarding.json
+        --
+        --grpc-server-addr 0.0.0.0:9559"
+
+    lon-frr:
+      kind: linux
+      image: frrouting/frr:latest
+      network-mode: container:lon
+      binds:
+        - configs/daemons:/etc/frr/daemons
+        - configs/vtysh.conf:/etc/frr/vtysh.conf
+        - configs/nobel/lon/frr.conf:/etc/frr/frr.conf
+      exec:
+        - sysctl -qw net.ipv4.ip_forward=0 net.ipv6.conf.all.forwarding=0
+        - apk add --no-cache tcpdump
+        - iptables -A OUTPUT -p icmp --icmp-type destination-unreachable -j DROP
+        - tc qdisc replace dev eth1 root tbf rate 5mbit burst 16kb latency 50ms
+        - tc qdisc replace dev eth2 root tbf rate 5mbit burst 16kb latency 50ms
+
+    lyo:
+      kind: linux
+      image: p4lang/behavioral-model:latest
+      mgmt-ipv4: 172.20.21.106
+      binds:
+        - basic_forwarding.json:/root/basic_forwarding.json
+      sysctls:
+        net.ipv4.ip_forward: 0
+        net.ipv6.conf.all.forwarding: 0
+      exec:
+        - sysctl -qw net.ipv4.ip_forward=0 net.ipv6.conf.all.forwarding=0
+      cmd: >
+        bash -c "sleep 2 &&
+        simple_switch_grpc
+        --thrift-port 9096
+        --device-id 6
+        -i 1@eth1 -i 2@eth2
+        /root/basic_forwarding.json
+        --
+        --grpc-server-addr 0.0.0.0:9559"
+
+    lyo-frr:
+      kind: linux
+      image: frrouting/frr:latest
+      network-mode: container:lyo
+      binds:
+        - configs/daemons:/etc/frr/daemons
+        - configs/vtysh.conf:/etc/frr/vtysh.conf
+        - configs/nobel/lyo/frr.conf:/etc/frr/frr.conf
+      exec:
+        - sysctl -qw net.ipv4.ip_forward=0 net.ipv6.conf.all.forwarding=0
+        - apk add --no-cache tcpdump
+        - iptables -A OUTPUT -p icmp --icmp-type destination-unreachable -j DROP
+        - tc qdisc replace dev eth1 root tbf rate 5mbit burst 16kb latency 50ms
+        - tc qdisc replace dev eth2 root tbf rate 5mbit burst 16kb latency 50ms
+
+    mil:
+      kind: linux
+      image: p4lang/behavioral-model:latest
+      mgmt-ipv4: 172.20.21.107
+      binds:
+        - basic_forwarding.json:/root/basic_forwarding.json
+      sysctls:
+        net.ipv4.ip_forward: 0
+        net.ipv6.conf.all.forwarding: 0
+      exec:
+        - sysctl -qw net.ipv4.ip_forward=0 net.ipv6.conf.all.forwarding=0
+      cmd: >
+        bash -c "sleep 2 &&
+        simple_switch_grpc
+        --thrift-port 9097
+        --device-id 7
+        -i 1@eth1 -i 2@eth2
+        /root/basic_forwarding.json
+        --
+        --grpc-server-addr 0.0.0.0:9559"
+
+    mil-frr:
+      kind: linux
+      image: frrouting/frr:latest
+      network-mode: container:mil
+      binds:
+        - configs/daemons:/etc/frr/daemons
+        - configs/vtysh.conf:/etc/frr/vtysh.conf
+        - configs/nobel/mil/frr.conf:/etc/frr/frr.conf
+      exec:
+        - sysctl -qw net.ipv4.ip_forward=0 net.ipv6.conf.all.forwarding=0
+        - apk add --no-cache tcpdump
+        - iptables -A OUTPUT -p icmp --icmp-type destination-unreachable -j DROP
+        - tc qdisc replace dev eth1 root tbf rate 5mbit burst 16kb latency 50ms
+        - tc qdisc replace dev eth2 root tbf rate 5mbit burst 16kb latency 50ms
+
+    mun:
+      kind: linux
+      image: p4lang/behavioral-model:latest
+      mgmt-ipv4: 172.20.21.108
+      binds:
+        - basic_forwarding.json:/root/basic_forwarding.json
+      sysctls:
+        net.ipv4.ip_forward: 0
+        net.ipv6.conf.all.forwarding: 0
+      exec:
+        - sysctl -qw net.ipv4.ip_forward=0 net.ipv6.conf.all.forwarding=0
+      cmd: >
+        bash -c "sleep 2 &&
+        simple_switch_grpc
+        --thrift-port 9098
+        --device-id 8
+        -i 1@eth1 -i 2@eth2
+        /root/basic_forwarding.json
+        --
+        --grpc-server-addr 0.0.0.0:9559"
+
+    mun-frr:
+      kind: linux
+      image: frrouting/frr:latest
+      network-mode: container:mun
+      binds:
+        - configs/daemons:/etc/frr/daemons
+        - configs/vtysh.conf:/etc/frr/vtysh.conf
+        - configs/nobel/mun/frr.conf:/etc/frr/frr.conf
+      exec:
+        - sysctl -qw net.ipv4.ip_forward=0 net.ipv6.conf.all.forwarding=0
+        - apk add --no-cache tcpdump
+        - iptables -A OUTPUT -p icmp --icmp-type destination-unreachable -j DROP
+        - tc qdisc replace dev eth1 root tbf rate 5mbit burst 16kb latency 50ms
+        - tc qdisc replace dev eth2 root tbf rate 5mbit burst 16kb latency 50ms
+
+    par:
+      kind: linux
+      image: p4lang/behavioral-model:latest
+      mgmt-ipv4: 172.20.21.109
+      binds:
+        - basic_forwarding.json:/root/basic_forwarding.json
+      sysctls:
+        net.ipv4.ip_forward: 0
+        net.ipv6.conf.all.forwarding: 0
+      exec:
+        - sysctl -qw net.ipv4.ip_forward=0 net.ipv6.conf.all.forwarding=0
+      cmd: >
+        bash -c "sleep 2 &&
+        simple_switch_grpc
+        --thrift-port 9099
+        --device-id 9
+        -i 1@eth1 -i 2@eth2 -i 3@eth3 -i 4@eth4 -i 5@eth5
+        /root/basic_forwarding.json
+        --
+        --grpc-server-addr 0.0.0.0:9559"
+
+    par-frr:
+      kind: linux
+      image: frrouting/frr:latest
+      network-mode: container:par
+      binds:
+        - configs/daemons:/etc/frr/daemons
+        - configs/vtysh.conf:/etc/frr/vtysh.conf
+        - configs/nobel/par/frr.conf:/etc/frr/frr.conf
+      exec:
+        - sysctl -qw net.ipv4.ip_forward=0 net.ipv6.conf.all.forwarding=0
+        - apk add --no-cache tcpdump
+        - iptables -A OUTPUT -p icmp --icmp-type destination-unreachable -j DROP
+        - tc qdisc replace dev eth2 root tbf rate 5mbit burst 16kb latency 50ms
+        - tc qdisc replace dev eth3 root tbf rate 5mbit burst 16kb latency 50ms
+        - tc qdisc replace dev eth4 root tbf rate 5mbit burst 16kb latency 50ms
+        - tc qdisc replace dev eth5 root tbf rate 5mbit burst 16kb latency 50ms
+
+    str:
+      kind: linux
+      image: p4lang/behavioral-model:latest
+      mgmt-ipv4: 172.20.21.110
+      binds:
+        - basic_forwarding.json:/root/basic_forwarding.json
+      sysctls:
+        net.ipv4.ip_forward: 0
+        net.ipv6.conf.all.forwarding: 0
+      exec:
+        - sysctl -qw net.ipv4.ip_forward=0 net.ipv6.conf.all.forwarding=0
+      cmd: >
+        bash -c "sleep 2 &&
+        simple_switch_grpc
+        --thrift-port 9100
+        --device-id 10
+        -i 1@eth1 -i 2@eth2 -i 3@eth3
+        /root/basic_forwarding.json
+        --
+        --grpc-server-addr 0.0.0.0:9559"
+
+    str-frr:
+      kind: linux
+      image: frrouting/frr:latest
+      network-mode: container:str
+      binds:
+        - configs/daemons:/etc/frr/daemons
+        - configs/vtysh.conf:/etc/frr/vtysh.conf
+        - configs/nobel/str/frr.conf:/etc/frr/frr.conf
+      exec:
+        - sysctl -qw net.ipv4.ip_forward=0 net.ipv6.conf.all.forwarding=0
+        - apk add --no-cache tcpdump
+        - iptables -A OUTPUT -p icmp --icmp-type destination-unreachable -j DROP
+        - tc qdisc replace dev eth1 root tbf rate 5mbit burst 16kb latency 50ms
+        - tc qdisc replace dev eth2 root tbf rate 5mbit burst 16kb latency 50ms
+        - tc qdisc replace dev eth3 root tbf rate 5mbit burst 16kb latency 50ms
+
+    zur:
+      kind: linux
+      image: p4lang/behavioral-model:latest
+      mgmt-ipv4: 172.20.21.111
+      binds:
+        - basic_forwarding.json:/root/basic_forwarding.json
+      sysctls:
+        net.ipv4.ip_forward: 0
+        net.ipv6.conf.all.forwarding: 0
+      exec:
+        - sysctl -qw net.ipv4.ip_forward=0 net.ipv6.conf.all.forwarding=0
+      cmd: >
+        bash -c "sleep 2 &&
+        simple_switch_grpc
+        --thrift-port 9101
+        --device-id 11
+        -i 1@eth1 -i 2@eth2 -i 3@eth3
+        /root/basic_forwarding.json
+        --
+        --grpc-server-addr 0.0.0.0:9559"
+
+    zur-frr:
+      kind: linux
+      image: frrouting/frr:latest
+      network-mode: container:zur
+      binds:
+        - configs/daemons:/etc/frr/daemons
+        - configs/vtysh.conf:/etc/frr/vtysh.conf
+        - configs/nobel/zur/frr.conf:/etc/frr/frr.conf
+      exec:
+        - sysctl -qw net.ipv4.ip_forward=0 net.ipv6.conf.all.forwarding=0
+        - apk add --no-cache tcpdump
+        - iptables -A OUTPUT -p icmp --icmp-type destination-unreachable -j DROP
+        - tc qdisc replace dev eth1 root tbf rate 5mbit burst 16kb latency 50ms
+        - tc qdisc replace dev eth2 root tbf rate 5mbit burst 16kb latency 50ms
+        - tc qdisc replace dev eth3 root tbf rate 5mbit burst 16kb latency 50ms
+
+    h1:
+      kind: linux
+      image: alpine:latest
+      cmd: sleep infinity
+      exec:
+        - ip addr add 10.0.1.1/24 dev eth1
+        - ip route add 10.0.0.0/8 via 10.0.1.254
+        - arp -s 10.0.1.254 00:00:00:00:03:01
+        - apk add --no-cache iperf3 python3
+        - iperf3 -s -D
+
+    h2:
+      kind: linux
+      image: alpine:latest
+      cmd: sleep infinity
+      exec:
+        - ip addr add 10.0.2.1/24 dev eth1
+        - ip route add 10.0.0.0/8 via 10.0.2.254
+        - arp -s 10.0.2.254 00:00:00:00:09:01
+        - apk add --no-cache iperf3 python3
+        - iperf3 -s -p 5201 -D
+        - iperf3 -s -p 5202 -D
+        - iperf3 -s -p 5203 -D
+        - iperf3 -s -p 5204 -D
+        - iperf3 -s -p 5205 -D
+        - iperf3 -s -p 5206 -D
+        - iperf3 -s -p 5207 -D
+        - iperf3 -s -p 5208 -D
+
+  links:
+    - type: veth
+      endpoints:
+        - node: h1
+          interface: eth1
+          mac: 00:00:00:01:01:01
+        - node: fra
+          interface: eth1
+          mac: 00:00:00:00:03:01
+    - type: veth
+      endpoints:
+        - node: par
+          interface: eth1
+          mac: 00:00:00:00:09:01
+        - node: h2
+          interface: eth1
+          mac: 00:00:00:02:02:02
+    - type: veth
+      endpoints:
+        - node: ams
+          interface: eth1
+          mac: 00:00:00:00:01:01
+        - node: bru
+          interface: eth1
+          mac: 00:00:00:00:02:01
+    - type: veth
+      endpoints:
+        - node: ams
+          interface: eth2
+          mac: 00:00:00:00:01:02
+        - node: ham
+          interface: eth1
+          mac: 00:00:00:00:04:01
+    - type: veth
+      endpoints:
+        - node: ams
+          interface: eth3
+          mac: 00:00:00:00:01:03
+        - node: lon
+          interface: eth1
+          mac: 00:00:00:00:05:01
+    - type: veth
+      endpoints:
+        - node: bru
+          interface: eth2
+          mac: 00:00:00:00:02:02
+        - node: fra
+          interface: eth2
+          mac: 00:00:00:00:03:02
+    - type: veth
+      endpoints:
+        - node: bru
+          interface: eth3
+          mac: 00:00:00:00:02:03
+        - node: par
+          interface: eth2
+          mac: 00:00:00:00:09:02
+    - type: veth
+      endpoints:
+        - node: fra
+          interface: eth3
+          mac: 00:00:00:00:03:03
+        - node: ham
+          interface: eth2
+          mac: 00:00:00:00:04:02
+    - type: veth
+      endpoints:
+        - node: fra
+          interface: eth4
+          mac: 00:00:00:00:03:04
+        - node: mun
+          interface: eth1
+          mac: 00:00:00:00:08:01
+    - type: veth
+      endpoints:
+        - node: fra
+          interface: eth5
+          mac: 00:00:00:00:03:05
+        - node: str
+          interface: eth1
+          mac: 00:00:00:00:0a:01
+    - type: veth
+      endpoints:
+        - node: lon
+          interface: eth2
+          mac: 00:00:00:00:05:02
+        - node: par
+          interface: eth3
+          mac: 00:00:00:00:09:03
+    - type: veth
+      endpoints:
+        - node: lyo
+          interface: eth1
+          mac: 00:00:00:00:06:01
+        - node: par
+          interface: eth4
+          mac: 00:00:00:00:09:04
+    - type: veth
+      endpoints:
+        - node: lyo
+          interface: eth2
+          mac: 00:00:00:00:06:02
+        - node: zur
+          interface: eth1
+          mac: 00:00:00:00:0b:01
+    - type: veth
+      endpoints:
+        - node: mil
+          interface: eth1
+          mac: 00:00:00:00:07:01
+        - node: mun
+          interface: eth2
+          mac: 00:00:00:00:08:02
+    - type: veth
+      endpoints:
+        - node: mil
+          interface: eth2
+          mac: 00:00:00:00:07:02
+        - node: zur
+          interface: eth2
+          mac: 00:00:00:00:0b:02
+    - type: veth
+      endpoints:
+        - node: par
+          interface: eth5
+          mac: 00:00:00:00:09:05
+        - node: str
+          interface: eth2
+          mac: 00:00:00:00:0a:02
+    - type: veth
+      endpoints:
+        - node: str
+          interface: eth3
+          mac: 00:00:00:00:0a:03
+        - node: zur
+          interface: eth3
+          mac: 00:00:00:00:0b:03

@@ -397,18 +397,247 @@ def handle_qos(args):
         plt.close(fig)
 
 
+NOBEL_PATHS = [
+    ("p1", "P1: fra-bru-par (56)", "#4c72b0"),
+    ("p2", "P2: fra-str-par (59)", "#55a868"),
+    ("p3", "P3: fra-ham-ams-lon-par (145)", "#dd8452"),
+    ("p4", "P4: fra-mun-mil-zur-lyo-par (162)", "#8172b3"),
+]
+NOBEL_PORTS = [5201, 5202, 5203, 5204]
+
+
+def parse_nobel_wire(results_dir, max_sec=24):
+    """Parse tcpdump_p{1..4}.txt captured on Frankfurt's 4 egress transit links."""
+    pat = re.compile(
+        r"(\d+):(\d+):(\d+\.\d+)\s+IP\s+\S+\s+>\s+10\.0\.2\.1\.(520[1-4]):.*length\s+(\d+)"
+    )
+    counts = {p[0]: {port: 0 for port in NOBEL_PORTS} for p in NOBEL_PATHS}
+    pkts = []  # (ts, path_key, port, length)
+
+    for key, _, _ in NOBEL_PATHS:
+        path = os.path.join(results_dir, f"tcpdump_{key}.txt")
+        if not os.path.exists(path):
+            continue
+        with open(path, "r", errors="ignore") as f:
+            for line in f:
+                m = pat.search(line)
+                if not m:
+                    continue
+                port = int(m.group(4))
+                length = int(m.group(5))
+                if length <= 0:
+                    continue
+                t = int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
+                counts[key][port] += 1
+                pkts.append((t, key, port, length))
+
+    if not pkts:
+        return counts, {k: {} for k, _, _ in NOBEL_PATHS}, {p: {} for p in NOBEL_PORTS}
+
+    f1_data = [x[0] for x in pkts if x[2] == 5201 and x[3] > 1000]
+    t0 = min(f1_data) if f1_data else min(x[0] for x in pkts)
+
+    path_series = {k: {} for k, _, _ in NOBEL_PATHS}
+    flow_series = {p: {} for p in NOBEL_PORTS}
+    for sec in range(1, max_sec + 1):
+        bucket = [x for x in pkts if (sec - 1) <= (x[0] - t0) < sec]
+        for k, _, _ in NOBEL_PATHS:
+            b = sum(x[3] for x in bucket if x[1] == k)
+            path_series[k][sec] = round(b * 8 / 1e6, 2)
+        for p in NOBEL_PORTS:
+            b = sum(x[3] for x in bucket if x[2] == p)
+            flow_series[p][sec] = round(b * 8 / 1e6, 2)
+
+    return counts, path_series, flow_series
+
+
+def plot_nobel_single(summary, out_path):
+    max_t = summary["duration"]
+    times = list(range(1, max_t + 1))
+    ys = [[summary["path_series"][k].get(str(t), summary["path_series"][k].get(t, 0.0)) for t in times]
+          for k, _, _ in NOBEL_PATHS]
+    ytot = [sum(col) for col in zip(*ys)]
+
+    fig, ax = plt.subplots(figsize=(9, 4.8), dpi=200)
+    ax.stackplot(
+        times, *ys,
+        labels=[label for _, label, _ in NOBEL_PATHS],
+        colors=[color for _, _, color in NOBEL_PATHS],
+        alpha=0.80,
+    )
+    ax.plot(times, ytot, color="black", linewidth=2.0, label="Suma wszystkich ścieżek")
+    ax.axhline(5.0, color="#c44e52", linestyle="--", linewidth=1.2, label="Limit 1 ścieżki (5 Mbit/s)")
+    ax.axhline(20.0, color="#2b4162", linestyle=":", linewidth=1.2, label="Pojemność 4 ścieżek (20 Mbit/s)")
+    ax.set_title(
+        f"{summary['scenario']} — Tryb: {summary['mode'].upper()} "
+        f"(śr. w stanie ustalonym: {summary['steady_agg_mbps']:.2f} Mbit/s)",
+        fontsize=11.5, fontweight="bold",
+    )
+    ax.set_xlabel("Czas [s]")
+    ax.set_ylabel("Przepustowość [Mbit/s]")
+    ax.set_xlim(1, max_t)
+    ax.set_ylim(0, 23)
+    ax.grid(True, linestyle="--", alpha=0.4)
+    ax.legend(loc="upper left", fontsize=8)
+    fig.tight_layout()
+    fig.savefig(out_path)
+    plt.close(fig)
+
+
+def plot_nobel_comparison(scenario, ecmp_data, famtar_data, out_ts_path, out_bars_path):
+    max_t = max(ecmp_data["duration"], famtar_data["duration"])
+    times = list(range(1, max_t + 1))
+
+    fig, axes = plt.subplots(1, 2, figsize=(13, 4.8), dpi=200, sharey=True)
+    for ax, data, title in zip(axes, [ecmp_data, famtar_data], ["Klasyczny ECMP (1 najkrótsza ścieżka)", "FAMTAR (4 ścieżki rozłączne)"]):
+        ys = [[data["path_series"][k].get(str(t), data["path_series"][k].get(t, 0.0)) for t in times]
+              for k, _, _ in NOBEL_PATHS]
+        ytot = [sum(col) for col in zip(*ys)]
+        ax.stackplot(
+            times, *ys,
+            labels=[label for _, label, _ in NOBEL_PATHS],
+            colors=[color for _, _, color in NOBEL_PATHS],
+            alpha=0.80,
+        )
+        ax.plot(times, ytot, color="black", linewidth=2.0, label="Suma (Total)")
+        ax.axhline(5.0, color="#c44e52", linestyle="--", linewidth=1.2, label="Limit 1 ścieżki (5 Mbit/s)")
+        ax.set_title(
+            f"{title}\nStan ustalony: {data['steady_agg_mbps']:.2f} Mbit/s | Retransmisje: {data['total_retransmits']}",
+            fontsize=10.5, fontweight="bold",
+        )
+        ax.set_xlabel("Czas [s]")
+        ax.set_xlim(1, max_t)
+        ax.set_ylim(0, 23)
+        ax.grid(True, linestyle="--", alpha=0.4)
+        ax.legend(loc="upper left", fontsize=7.8)
+
+    axes[0].set_ylabel("Przepustowość [Mbit/s]")
+    fig.suptitle(f"Topologia nobel-eu (Frankfurt -> Paris): {scenario}", fontsize=13, fontweight="bold")
+    fig.tight_layout()
+    fig.savefig(out_ts_path)
+    plt.close(fig)
+
+    # Bar chart: per-path steady throughput + total steady throughput + retransmissions
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(11.5, 4.5), dpi=200)
+    x = list(range(len(NOBEL_PATHS) + 1))
+    labels = ["P1\n(bru)", "P2\n(str)", "P3\n(ams-lon)", "P4\n(mil-lyo)", "SUMA"]
+    w = 0.35
+    e_vals = [ecmp_data["steady_per_path"][k] for k, _, _ in NOBEL_PATHS] + [ecmp_data["steady_agg_mbps"]]
+    f_vals = [famtar_data["steady_per_path"][k] for k, _, _ in NOBEL_PATHS] + [famtar_data["steady_agg_mbps"]]
+
+    b1 = ax1.bar([i - w / 2 for i in x], e_vals, width=w, label="ECMP", color="#c44e52")
+    b2 = ax1.bar([i + w / 2 for i in x], f_vals, width=w, label="FAMTAR", color="#55a868")
+    ax1.axhline(5.0, color="gray", linestyle="--", linewidth=1.0, label="Pojemność 1 łącza (5 Mbit/s)")
+    ax1.set_xticks(x)
+    ax1.set_xticklabels(labels, fontweight="bold")
+    ax1.set_ylabel("Przepustowość w stanie ustalonym [Mbit/s]")
+    ax1.set_ylim(0, 23)
+    ax1.set_title("Rozkład ruchu na ścieżkach (stan ustalony)", fontweight="bold")
+    ax1.grid(True, axis="y", linestyle="--", alpha=0.4)
+    ax1.legend(fontsize=8.5)
+    for bars in (b1, b2):
+        for bar in bars:
+            h = bar.get_height()
+            ax1.annotate(f"{h:.1f}", xy=(bar.get_x() + bar.get_width() / 2, h),
+                         xytext=(0, 3), textcoords="offset points", ha="center", fontsize=8)
+
+    retrans = [ecmp_data["total_retransmits"], famtar_data["total_retransmits"]]
+    br = ax2.bar([0, 1], retrans, width=0.45, color=["#c44e52", "#55a868"])
+    ax2.set_xticks([0, 1])
+    ax2.set_xticklabels(["ECMP", "FAMTAR"], fontweight="bold")
+    ax2.set_ylabel("Liczba retransmisji TCP")
+    ax2.set_title("Straty / Retransmisje TCP (4 przepływy)", fontweight="bold")
+    ax2.grid(True, axis="y", linestyle="--", alpha=0.4)
+    for bar in br:
+        h = bar.get_height()
+        ax2.annotate(f"{int(h)}", xy=(bar.get_x() + bar.get_width() / 2, h),
+                     xytext=(0, 3), textcoords="offset points", ha="center", fontsize=9, fontweight="bold")
+
+    fig.suptitle(f"Zestawienie wyników nobel-eu: {scenario}", fontsize=13, fontweight="bold")
+    fig.tight_layout()
+    fig.savefig(out_bars_path)
+    plt.close(fig)
+
+
+def handle_nobel(args):
+    dur = args.duration
+    stagger = args.stagger
+    flows = {}
+    for idx, port in enumerate(NOBEL_PORTS):
+        flows[f"flow{idx + 1}"] = parse_iperf(
+            os.path.join(args.dir, f"flow{idx + 1}.json"), offset_sec=idx * stagger
+        )
+
+    counts, path_series, flow_series = parse_nobel_wire(args.dir, max_sec=dur)
+    steady_start = 3 * stagger + 2
+    steady_range = [t for t in range(steady_start, dur)] or list(range(1, dur + 1))
+
+    steady_per_path = {}
+    for k, _, _ in NOBEL_PATHS:
+        vals = [path_series[k].get(t, 0.0) for t in steady_range]
+        steady_per_path[k] = round(sum(vals) / len(vals), 2)
+    steady_agg = round(sum(steady_per_path.values()), 2)
+
+    flow_paths = {}
+    for idx, port in enumerate(NOBEL_PORTS):
+        best_k = max(counts.keys(), key=lambda k: counts[k][port])
+        flow_paths[f"flow{idx + 1}"] = best_k if counts[best_k][port] > 0 else "none"
+
+    tot_ret = sum((flows[k]["retransmits"] if flows[k] else 0) for k in flows)
+    tot_iperf_rcv = round(sum((flows[k]["rcv_mbps"] if flows[k] else 0.0) for k in flows), 2)
+
+    summary = {
+        "scenario": args.scenario,
+        "mode": args.mode,
+        "duration": dur,
+        "stagger": stagger,
+        "steady_window": [steady_range[0], steady_range[-1]],
+        "flows": flows,
+        "flow_paths": flow_paths,
+        "packet_counts": counts,
+        "path_series": {k: {str(t): v for t, v in path_series[k].items()} for k in path_series},
+        "steady_per_path": steady_per_path,
+        "steady_agg_mbps": steady_agg,
+        "total_iperf_rcv_mbps": tot_iperf_rcv,
+        "total_retransmits": tot_ret,
+    }
+
+    with open(os.path.join(args.dir, "summary.json"), "w") as f:
+        json.dump(summary, f, indent=2)
+
+    plot_nobel_single(summary, os.path.join(args.dir, "throughput_timeseries.png"))
+    path_str = " ".join(f"{k}={steady_per_path[k]:.2f}M" for k, _, _ in NOBEL_PATHS)
+    print(
+        f"[{args.scenario}:{args.mode}] steady({steady_range[0]}..{steady_range[-1]}s) "
+        f"{path_str} total={steady_agg:.2f}M iperf_sum={tot_iperf_rcv:.2f}M retrans={tot_ret}"
+    )
+
+    base_results = os.path.dirname(args.dir.rstrip("/"))
+    ecmp_json = os.path.join(base_results, f"{args.scenario}_ecmp", "summary.json")
+    famtar_json = os.path.join(base_results, f"{args.scenario}_famtar", "summary.json")
+    if os.path.exists(ecmp_json) and os.path.exists(famtar_json):
+        with open(ecmp_json) as f1, open(famtar_json) as f2:
+            e_data, f_data = json.load(f1), json.load(f2)
+        ts_cmp = os.path.join(base_results, f"{args.scenario}_comparison_timeseries.png")
+        bar_cmp = os.path.join(base_results, f"{args.scenario}_comparison_bars.png")
+        plot_nobel_comparison(args.scenario, e_data, f_data, ts_cmp, bar_cmp)
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--type", choices=["throughput", "qos"], required=True)
+    parser.add_argument("--type", choices=["throughput", "qos", "nobel"], required=True)
     parser.add_argument("--scenario", required=True)
     parser.add_argument("--mode", required=True)
     parser.add_argument("--dir", required=True)
     parser.add_argument("--stagger", type=int, default=2)
+    parser.add_argument("--duration", type=int, default=24)
     parser.add_argument("--elephant-duration", type=int, default=10)
     args = parser.parse_args()
 
     if args.type == "throughput":
         handle_throughput(args)
+    elif args.type == "nobel":
+        handle_nobel(args)
     else:
         handle_qos(args)
 

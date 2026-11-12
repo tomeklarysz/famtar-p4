@@ -3,16 +3,22 @@ set -e
 
 ACTION="${1:-}"
 MODE="${2:-famtar}"
-ROUTERS=(r1 r2 r3 r4)
+TARGET="${3:-${TOPO:-configs}}"
+if [ "$TARGET" != "configs" ] && [ -d "configs/$TARGET" ]; then
+  CONFIG_DIR="configs/$TARGET"
+else
+  CONFIG_DIR="$TARGET"
+fi
 
 usage() {
-  echo "Użycie: $0 {start|stop|restart|status} [famtar|ecmp]"
+  echo "Użycie: $0 {start|stop|restart|status} [famtar|ecmp] [configs|nobel|ścieżka]"
   echo ""
   echo "Przykłady:"
-  echo "  $0 restart famtar   # przełącza kontrolery w tryb FAMTAR"
-  echo "  $0 restart ecmp     # przełącza kontrolery w tryb ECMP"
-  echo "  $0 stop             # zatrzymuje wszystkie procesy kontrolera"
-  echo "  $0 status           # sprawdza stan procesów kontrolera"
+  echo "  $0 restart famtar         # przełącza kontrolery (r1..r4) w tryb FAMTAR"
+  echo "  $0 restart ecmp           # przełącza kontrolery (r1..r4) w tryb ECMP"
+  echo "  $0 restart famtar nobel   # uruchamia kontrolery dla topologii nobel-eu"
+  echo "  $0 stop                   # zatrzymuje wszystkie procesy kontrolera"
+  echo "  $0 status                 # sprawdza stan procesów kontrolera"
   exit 1
 }
 
@@ -26,11 +32,21 @@ stop_controllers() {
 
 start_controllers() {
   local target_mode="$1"
+  shopt -s nullglob
+  local confs=("$CONFIG_DIR"/*/controller.yaml)
+  shopt -u nullglob
+  if [ ${#confs[@]} -eq 0 ]; then
+    echo "[!] Brak plików */controller.yaml w katalogu: $CONFIG_DIR" >&2
+    exit 1
+  fi
+
   stop_controllers
-  echo "[*] Uruchamianie kontrolerów w trybie: $target_mode..."
+  echo "[*] Uruchamianie kontrolerów (${#confs[@]} węzłów z $CONFIG_DIR) w trybie: $target_mode..."
   mkdir -p logs
-  for r in "${ROUTERS[@]}"; do
-    sudo GRPC_VERBOSITY=ERROR venv/bin/python3 controller.py --config "configs/$r/controller.yaml" --mode "$target_mode" \
+  for conf in "${confs[@]}"; do
+    local r
+    r=$(basename "$(dirname "$conf")")
+    sudo GRPC_VERBOSITY=ERROR venv/bin/python3 controller.py --config "$conf" --mode "$target_mode" \
       > "logs/$r.log" 2>&1 &
   done
   sleep 1

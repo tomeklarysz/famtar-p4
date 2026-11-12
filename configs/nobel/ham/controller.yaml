@@ -1,0 +1,23 @@
+name: ham
+device_id: 4
+thrift_port: 9094
+grpc_addr: 172.20.21.104:9559
+netns: clab-p4-nobel-lab-ham
+frr_container: clab-p4-nobel-lab-ham-frr
+port_map:
+  eth1: 1
+  eth2: 2
+default_metrics:
+  eth1: 39
+  eth2: 38
+dmac:
+  1: ["00:00:00:00:01:02", "00:00:00:00:04:01"]
+  2: ["00:00:00:00:03:03", "00:00:00:00:04:02"]
+congestion:
+  poll_interval_s: 0.1
+  capacity_bps: 5000000
+  th_max: 0.90
+  th_min: 0.70
+  ewma_alpha: 0.2
+  hold_down_s: 2.0
+  congested_metric: 1000

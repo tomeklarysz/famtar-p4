@@ -1,0 +1,26 @@
+name: str
+device_id: 10
+thrift_port: 9100
+grpc_addr: 172.20.21.110:9559
+netns: clab-p4-nobel-lab-str
+frr_container: clab-p4-nobel-lab-str-frr
+port_map:
+  eth1: 1
+  eth2: 2
+  eth3: 3
+default_metrics:
+  eth1: 20
+  eth2: 39
+  eth3: 14
+dmac:
+  1: ["00:00:00:00:03:05", "00:00:00:00:0a:01"]
+  2: ["00:00:00:00:09:05", "00:00:00:00:0a:02"]
+  3: ["00:00:00:00:0b:03", "00:00:00:00:0a:03"]
+congestion:
+  poll_interval_s: 0.1
+  capacity_bps: 5000000
+  th_max: 0.90
+  th_min: 0.70
+  ewma_alpha: 0.2
+  hold_down_s: 2.0
+  congested_metric: 1000
