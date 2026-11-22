@@ -74,11 +74,11 @@
             thrift = str(c.get("thrift_port", 9089 + int(c["device_id"])))
 
             cmds = (
-                "register_reset MyIngress.reg_signature\n"
-                "register_reset MyIngress.reg_egress_port\n"
-                "register_reset MyIngress.reg_saved_ttl\n"
-                "register_reset MyIngress.reg_timestamp\n"
-                "counter_reset MyIngress.port_bytes_counter\n"
+                "register_reset FamtarIngress.reg_signature\n"
+                "register_reset FamtarIngress.reg_egress_port\n"
+                "register_reset FamtarIngress.reg_saved_ttl\n"
+                "register_reset FamtarIngress.reg_timestamp\n"
+                "counter_reset FamtarIngress.port_bytes_counter\n"
             )
             subprocess.run(
                 ["docker", "exec", "-i", netns, "simple_switch_CLI", "--thrift-port", thrift],

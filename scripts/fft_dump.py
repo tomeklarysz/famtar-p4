@@ -48,13 +48,13 @@ def load_router_specs(config_dir=None):
 
 
 def read_registers(container_name, thrift_port):
-    cmds = "".join(f"register_read MyIngress.{r}\n" for r in REGISTERS)
+    cmds = "".join(f"register_read FamtarIngress.{r}\n" for r in REGISTERS)
     out = subprocess.run(
         ["docker", "exec", "-i", container_name,
          "simple_switch_CLI", "--thrift-port", str(thrift_port)],
         input=cmds, capture_output=True, text=True, check=True).stdout
     regs = {}
-    for m in re.finditer(r"MyIngress\.(\w+)=\s*([\d,\s]+)", out):
+    for m in re.finditer(r"FamtarIngress\.(\w+)=\s*([\d,\s]+)", out):
         regs[m.group(1)] = [int(v) for v in m.group(2).replace(",", " ").split()]
     return regs
 

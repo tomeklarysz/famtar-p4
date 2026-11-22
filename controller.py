@@ -43,7 +43,7 @@ class P4Router:
         sh.global_options["verbose"] = False
 
         for port, (dst_mac, src_mac) in self.dmac.items():
-            te = sh.TableEntry("MyIngress.dmac_table")(action="MyIngress.set_dmac")
+            te = sh.TableEntry("FamtarIngress.dmac_table")(action="FamtarIngress.set_dmac")
             te.match["standard_metadata.egress_spec"] = str(port)
             te.action["dst_mac"] = dst_mac
             te.action["src_mac"] = src_mac
@@ -54,7 +54,7 @@ class P4Router:
             print(f"[{self.name}] dmac: port {port} -> dst {dst_mac}, src {src_mac}", flush=True)
 
         for port in self.port_map.values():
-            member = sh.ActionProfileMember("MyIngress.ecmp_selector")(member_id=port, action="MyIngress.set_nhop")
+            member = sh.ActionProfileMember("FamtarIngress.ecmp_selector")(member_id=port, action="FamtarIngress.set_nhop")
             member.action["port"] = str(port)
             try:
                 member.insert()
@@ -138,7 +138,7 @@ class P4Router:
             self.update_p4_ecmp_route(prefix, p4_ports)
             return
         p4_port = p4_ports[0]
-        te = sh.TableEntry("MyIngress.ipv4_lpm")
+        te = sh.TableEntry("FamtarIngress.ipv4_lpm")
         te.match["hdr.ipv4.dstAddr"] = prefix
         te.member_id = p4_port
         try:
@@ -150,7 +150,7 @@ class P4Router:
 
     def update_p4_ecmp_route(self, prefix, p4_ports):
         group_id = self.ecmp_groups.setdefault(prefix, len(self.ecmp_groups) + 100)
-        group = sh.ActionProfileGroup("MyIngress.ecmp_selector")(group_id=group_id)
+        group = sh.ActionProfileGroup("FamtarIngress.ecmp_selector")(group_id=group_id)
         for port in p4_ports:
             group.add(port)
         try:
@@ -158,7 +158,7 @@ class P4Router:
         except Exception:
             group.modify()
 
-        te = sh.TableEntry("MyIngress.ipv4_lpm")
+        te = sh.TableEntry("FamtarIngress.ipv4_lpm")
         te.match["hdr.ipv4.dstAddr"] = prefix
         te.group_id = group_id
         try:
@@ -169,7 +169,7 @@ class P4Router:
             print(f"[{self.name}] P4 ECMP route modified: {prefix} -> ports {p4_ports} (group {group_id})", flush=True)
 
     def delete_p4_route(self, prefix):
-        te = sh.TableEntry("MyIngress.ipv4_lpm")
+        te = sh.TableEntry("FamtarIngress.ipv4_lpm")
         te.match["hdr.ipv4.dstAddr"] = prefix
         try:
             te.delete()
@@ -179,7 +179,7 @@ class P4Router:
 
     def read_port_bytes(self, port):
         try:
-            ce = sh.CounterEntry("MyIngress.port_bytes_counter")
+            ce = sh.CounterEntry("FamtarIngress.port_bytes_counter")
             ce.index = port
             for entry in ce.read():
                 return entry.data.byte_count

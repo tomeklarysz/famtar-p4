@@ -59,11 +59,11 @@
             R="${item%%:*}"
             PORT="${item##*:}"
             docker exec -i "clab-p4-basic-lab-$R" simple_switch_CLI --thrift-port "$PORT" << 'EOF' >/dev/null
-        register_reset MyIngress.reg_signature
-        register_reset MyIngress.reg_egress_port
-        register_reset MyIngress.reg_saved_ttl
-        register_reset MyIngress.reg_timestamp
-        counter_reset MyIngress.port_bytes_counter
+        register_reset FamtarIngress.reg_signature
+        register_reset FamtarIngress.reg_egress_port
+        register_reset FamtarIngress.reg_saved_ttl
+        register_reset FamtarIngress.reg_timestamp
+        counter_reset FamtarIngress.port_bytes_counter
         EOF
           done
 

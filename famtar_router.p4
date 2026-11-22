@@ -69,7 +69,7 @@ struct metadata {
     // When both flags == 0: collision with an active flow or non-TCP/UDP (LPM without overwriting FFT)
 }
 
-parser MyParser(packet_in packet,
+parser FamtarParser(packet_in packet,
                 out headers hdr,
                 inout metadata meta,
                 inout standard_metadata_t standard_metadata) {
@@ -106,13 +106,13 @@ parser MyParser(packet_in packet,
     }
 }
 
-control MyVerifyChecksum(inout headers hdr, inout metadata meta) {
+control FamtarVerifyChecksum(inout headers hdr, inout metadata meta) {
     apply {
        // empty for now, just for test purposes
     }
 }
 
-control MyIngress(inout headers hdr,
+control FamtarIngress(inout headers hdr,
                   inout metadata meta,
                   inout standard_metadata_t standard_metadata) {
 
@@ -269,7 +269,7 @@ control MyIngress(inout headers hdr,
     }
 }
 
-control MyEgress(inout headers hdr,
+control FamtarEgress(inout headers hdr,
                  inout metadata meta,
                  inout standard_metadata_t standard_metadata) {
     apply {
@@ -277,7 +277,7 @@ control MyEgress(inout headers hdr,
     }
 }
 
-control MyComputeChecksum(inout headers hdr, inout metadata meta) {
+control FamtarComputeChecksum(inout headers hdr, inout metadata meta) {
     apply {
         update_checksum(
             hdr.ipv4.isValid(),
@@ -297,7 +297,7 @@ control MyComputeChecksum(inout headers hdr, inout metadata meta) {
     }
 }
 
-control MyDeparser(packet_out packet, in headers hdr) {
+control FamtarDeparser(packet_out packet, in headers hdr) {
     apply {
         packet.emit(hdr.ethernet);
         packet.emit(hdr.ipv4);
@@ -309,10 +309,10 @@ control MyDeparser(packet_out packet, in headers hdr) {
 // switch instantiation
 
 V1Switch(
-    MyParser(),
-    MyVerifyChecksum(),
-    MyIngress(),
-    MyEgress(),
-    MyComputeChecksum(),
-    MyDeparser()
+    FamtarParser(),
+    FamtarVerifyChecksum(),
+    FamtarIngress(),
+    FamtarEgress(),
+    FamtarComputeChecksum(),
+    FamtarDeparser()
 ) main;
