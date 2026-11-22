@@ -68,7 +68,7 @@ def switch_uptime_us(container_name):
 
 
 def flow_signature(src, dst, sport, dport, proto):
-    # same field order as the hash() call in basic_forwarding.p4
+    # same field order as the hash() call in famtar_router.p4
     data = struct.pack("!4s4sHHB", bytes(map(int, src.split("."))),
                        bytes(map(int, dst.split("."))), sport, dport, proto)
     return zlib.crc32(data) % 0xFFFFFFFF

@@ -1,0 +1,142 @@
+---
+- name: "Scenariusz 2: Topologia symetryczna (10 vs 10) - Benchmark UDP Pareto/Poissona (Throughput + Packet Loss)"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    mode: "famtar"
+    scenario_id: "scenario2_pareto"
+    runs: 5
+    base_seed: 42
+    num_flows: 200
+    mean_size_mb: 0.65
+    pareto_shape: 1.35
+    mean_iat: 0.22
+    rate_kbs: 125.0
+    pkt_size: 1000
+    max_duration: 60
+    win_start: 10
+    win_end: 45
+    target_ip: "10.0.2.1"
+    target_port: 5000
+    project_root: "{{ (playbook_dir ~ '/../..') | realpath }}"
+    results_dir: "{{ project_root }}/results/{{ scenario_id }}_{{ mode }}"
+
+  tasks:
+    - name: Wyświetlenie parametrów benchmarku
+      ansible.builtin.debug:
+        msg: >
+          Uruchamianie {{ scenario_id }} | Tryb: {{ mode | upper }} | Powtórzenia: {{ runs }} (seedy od {{ base_seed }}) |
+          Przepływy: {{ num_flows }} (Pareto mu={{ mean_size_mb }}M, shape={{ pareto_shape }}, IAT={{ mean_iat }}s, rate={{ rate_kbs }}kB/s) |
+          Katalog wyników: {{ results_dir }}
+
+    - name: Przygotowanie czystego katalogu na wyniki
+      ansible.builtin.shell: |
+        rm -rf "{{ results_dir }}/run_"* "{{ results_dir }}/summary.json"
+        mkdir -p "{{ results_dir }}"
+      changed_when: true
+
+    - name: Upewnienie się, że python3 i skrypty generatora są na węzłach h1 i h2
+      ansible.builtin.shell: |
+        docker exec clab-p4-basic-lab-h1 which python3 >/dev/null || docker exec clab-p4-basic-lab-h1 apk add --no-cache python3
+        docker exec clab-p4-basic-lab-h2 which python3 >/dev/null || docker exec clab-p4-basic-lab-h2 apk add --no-cache python3
+        docker cp {{ project_root }}/scripts/traffic_sender.py clab-p4-basic-lab-h1:/tmp/traffic_sender.py
+        docker cp {{ project_root }}/scripts/traffic_receiver.py clab-p4-basic-lab-h2:/tmp/traffic_receiver.py
+      changed_when: false
+
+    - name: "Wykonanie {{ runs }} serii pomiarowych UDP Pareto (seedy {{ base_seed }}..{{ (base_seed | int) + (runs | int) - 1 }})"
+      ansible.builtin.shell: |
+        set -e
+        for run_idx in $(seq 1 {{ runs }}); do
+          SEED=$(( {{ base_seed }} + run_idx - 1 ))
+          RUN_DIR="{{ results_dir }}/run_${run_idx}"
+          mkdir -p "$RUN_DIR"
+          echo "=== [{{ scenario_id }}:{{ mode }}] Seria ${run_idx}/{{ runs }} (seed=${SEED}) ==="
+
+          # 1. Reset rejestrów P4 (FFT oraz liczników portów)
+          for item in "r1:9090" "r2:9091" "r3:9092" "r4:9093"; do
+            R="${item%%:*}"
+            PORT="${item##*:}"
+            docker exec -i "clab-p4-basic-lab-$R" simple_switch_CLI --thrift-port "$PORT" << 'EOF' >/dev/null
+        register_reset MyIngress.reg_signature
+        register_reset MyIngress.reg_egress_port
+        register_reset MyIngress.reg_saved_ttl
+        register_reset MyIngress.reg_timestamp
+        counter_reset MyIngress.port_bytes_counter
+        EOF
+          done
+
+          # 2. Konfiguracja symetrycznych metryk IS-IS (Ścieżka przez r2 = 10, Ścieżka przez r3 = 10)
+          docker exec clab-p4-basic-lab-r1-frr vtysh -c "conf t" -c "router isis FAMTAR" -c "lsp-gen-interval 1" -c "spf-interval 1" -c "interface eth2" -c "isis metric 10" -c "interface eth3" -c "isis metric 10" >/dev/null
+          docker exec clab-p4-basic-lab-r2-frr vtysh -c "conf t" -c "router isis FAMTAR" -c "lsp-gen-interval 1" -c "spf-interval 1" -c "interface eth1" -c "isis metric 10" -c "interface eth2" -c "isis metric 10" >/dev/null
+          docker exec clab-p4-basic-lab-r3-frr vtysh -c "conf t" -c "router isis FAMTAR" -c "lsp-gen-interval 1" -c "spf-interval 1" -c "interface eth1" -c "isis metric 10" -c "interface eth2" -c "isis metric 10" >/dev/null
+          docker exec clab-p4-basic-lab-r4-frr vtysh -c "conf t" -c "router isis FAMTAR" -c "lsp-gen-interval 1" -c "spf-interval 1" -c "interface eth2" -c "isis metric 10" -c "interface eth3" -c "isis metric 10" >/dev/null
+
+          sleep 4
+
+          # 3. Czyszczenie starych procesów i start tcpdump
+          docker exec clab-p4-basic-lab-h1 pkill -f traffic_sender.py 2>/dev/null || true
+          docker exec clab-p4-basic-lab-h2 pkill -f traffic_receiver.py 2>/dev/null || true
+          docker exec clab-p4-basic-lab-r2-frr pkill -f tcpdump 2>/dev/null || true
+          docker exec clab-p4-basic-lab-r3-frr pkill -f tcpdump 2>/dev/null || true
+          docker exec clab-p4-basic-lab-r2-frr rm -f /tmp/r2_dump.txt
+          docker exec clab-p4-basic-lab-r3-frr rm -f /tmp/r3_dump.txt
+          docker exec clab-p4-basic-lab-h1 rm -f /tmp/sender_stats.json
+          docker exec clab-p4-basic-lab-h2 rm -f /tmp/receiver_stats.json
+
+          docker exec -d clab-p4-basic-lab-r2-frr sh -c "tcpdump -l -n -tt -i eth1 'udp and dst port {{ target_port }}' > /tmp/r2_dump.txt 2>&1"
+          docker exec -d clab-p4-basic-lab-r3-frr sh -c "tcpdump -l -n -tt -i eth1 'udp and dst port {{ target_port }}' > /tmp/r3_dump.txt 2>&1"
+
+          # 4. Start odbiornika na h2 i nadawcy na h1
+          docker exec -d clab-p4-basic-lab-h2 python3 /tmp/traffic_receiver.py \
+            --bind 0.0.0.0 \
+            --port {{ target_port }} \
+            --output /tmp/receiver_stats.json \
+            --max-duration {{ (max_duration | int) + 10 }} \
+            --idle-timeout 6.0 \
+            --win-start {{ win_start }} \
+            --win-end {{ win_end }}
+
+          sleep 1
+
+          docker exec clab-p4-basic-lab-h1 python3 /tmp/traffic_sender.py \
+            --target-ip {{ target_ip }} \
+            --target-port {{ target_port }} \
+            --num-flows {{ num_flows }} \
+            --rate-kbs {{ rate_kbs }} \
+            --pkt-size {{ pkt_size }} \
+            --mean-size-mb {{ mean_size_mb }} \
+            --pareto-shape {{ pareto_shape }} \
+            --mean-iat {{ mean_iat }} \
+            --seed "$SEED" \
+            --max-duration {{ max_duration }} \
+            --output /tmp/sender_stats.json
+
+          sleep 2
+          /usr/bin/python3 {{ project_root }}/scripts/fft_dump.py > "$RUN_DIR/fft_snapshot.txt" 2>&1 || true
+
+          # 5. Zatrzymanie procesów i pobranie wyników
+          docker exec clab-p4-basic-lab-r2-frr pkill -f tcpdump 2>/dev/null || true
+          docker exec clab-p4-basic-lab-r3-frr pkill -f tcpdump 2>/dev/null || true
+          docker exec clab-p4-basic-lab-h2 pkill -INT -f traffic_receiver.py 2>/dev/null || true
+          sleep 1
+          docker cp clab-p4-basic-lab-r2-frr:/tmp/r2_dump.txt "$RUN_DIR/tcpdump_r2.txt" || true
+          docker cp clab-p4-basic-lab-r3-frr:/tmp/r3_dump.txt "$RUN_DIR/tcpdump_r3.txt" || true
+          docker cp clab-p4-basic-lab-h1:/tmp/sender_stats.json "$RUN_DIR/sender_stats.json" || true
+          docker cp clab-p4-basic-lab-h2:/tmp/receiver_stats.json "$RUN_DIR/receiver_stats.json" || true
+
+          MPLCONFIGDIR=/tmp/matplotlib /usr/bin/python3 {{ project_root }}/ansible/scripts/analyze_and_plot.py \
+            --type pareto \
+            --scenario {{ scenario_id }} \
+            --mode {{ mode }} \
+            --dir "$RUN_DIR"
+        done
+      args:
+        executable: /bin/bash
+      register: analysis_out
+      changed_when: true
+
+    - name: Podsumowanie statystyczne benchmarku
+      ansible.builtin.debug:
+        msg: "{{ analysis_out.stdout_lines }}"

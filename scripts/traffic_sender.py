@@ -49,6 +49,7 @@ class TrafficSender:
         self.stats = {}
         self.total_pkts_sent = 0
         self.total_bytes_sent = 0
+        self.buckets = {}
 
         # Pre-computed padding
         payload_len = max(0, self.pkt_size - HEADER_SIZE)
@@ -130,7 +131,15 @@ class TrafficSender:
                 sock.sendto(packet_data, self.target_addr)
                 pkts_sent += 1
                 self.total_pkts_sent += 1
-                self.total_bytes_sent += len(packet_data)
+                pkt_len = len(packet_data)
+                self.total_bytes_sent += pkt_len
+                sec_idx = int(now_wall - global_start_time)
+                b = self.buckets.get(sec_idx)
+                if b is None:
+                    b = {"sec": sec_idx, "pkts": 0, "bytes": 0}
+                    self.buckets[sec_idx] = b
+                b["pkts"] += 1
+                b["bytes"] += pkt_len
             except BlockingIOError:
                 pass
             except Exception as e:
@@ -179,6 +188,15 @@ class TrafficSender:
 
     def save_results(self, duration):
         mbps = (self.total_bytes_sent * 8.0) / (max(0.001, duration) * 1e6)
+        ts_list = [
+            {
+                "sec": sec,
+                "pkts": self.buckets[sec]["pkts"],
+                "bytes": self.buckets[sec]["bytes"],
+                "mbps": round((self.buckets[sec]["bytes"] * 8.0) / 1e6, 3),
+            }
+            for sec in sorted(self.buckets.keys())
+        ]
         out = {
             "summary": {
                 "num_flows": self.num_flows,
@@ -193,7 +211,8 @@ class TrafficSender:
                 "pareto_shape": self.pareto_shape,
                 "mean_iat": self.mean_iat,
                 "rate_kbs": self.rate_kbs,
-            }
+            },
+            "timeseries": ts_list,
         }
         os.makedirs(os.path.dirname(os.path.abspath(self.output_file)), exist_ok=True)
         with open(self.output_file, "w") as f:

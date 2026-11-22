@@ -7,7 +7,7 @@ topology:
       image: p4lang/behavioral-model:latest
       mgmt-ipv4: 172.20.20.4
       binds:
-        - basic_forwarding.json:/root/basic_forwarding.json
+        - famtar_router.json:/root/famtar_router.json
       sysctls:
         net.ipv4.ip_forward: 0
         net.ipv6.conf.all.forwarding: 0
@@ -19,7 +19,7 @@ topology:
         --thrift-port 9090
         --device-id 1
         -i 1@eth1 -i 2@eth2 -i 3@eth3
-        /root/basic_forwarding.json
+        /root/famtar_router.json
         --
         --grpc-server-addr 0.0.0.0:9559"
 
@@ -43,7 +43,7 @@ topology:
       image: p4lang/behavioral-model:latest
       mgmt-ipv4: 172.20.20.5
       binds:
-        - basic_forwarding.json:/root/basic_forwarding.json
+        - famtar_router.json:/root/famtar_router.json
       sysctls:
         net.ipv4.ip_forward: 0
         net.ipv6.conf.all.forwarding: 0
@@ -55,7 +55,7 @@ topology:
         --thrift-port 9091
         --device-id 2
         -i 1@eth1 -i 2@eth2
-        /root/basic_forwarding.json
+        /root/famtar_router.json
         --
         --grpc-server-addr 0.0.0.0:9559"
 
@@ -79,7 +79,7 @@ topology:
       image: p4lang/behavioral-model:latest
       mgmt-ipv4: 172.20.20.6
       binds:
-        - basic_forwarding.json:/root/basic_forwarding.json
+        - famtar_router.json:/root/famtar_router.json
       sysctls:
         net.ipv4.ip_forward: 0
         net.ipv6.conf.all.forwarding: 0
@@ -91,7 +91,7 @@ topology:
         --thrift-port 9092
         --device-id 3
         -i 1@eth1 -i 2@eth2
-        /root/basic_forwarding.json
+        /root/famtar_router.json
         --
         --grpc-server-addr 0.0.0.0:9559"
 
@@ -115,7 +115,7 @@ topology:
       image: p4lang/behavioral-model:latest
       mgmt-ipv4: 172.20.20.7
       binds:
-        - basic_forwarding.json:/root/basic_forwarding.json
+        - famtar_router.json:/root/famtar_router.json
       sysctls:
         net.ipv4.ip_forward: 0
         net.ipv6.conf.all.forwarding: 0
@@ -127,7 +127,7 @@ topology:
         --thrift-port 9093
         --device-id 4
         -i 1@eth1 -i 2@eth2 -i 3@eth3
-        /root/basic_forwarding.json
+        /root/famtar_router.json
         --
         --grpc-server-addr 0.0.0.0:9559"
 

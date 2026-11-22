@@ -6,5 +6,5 @@ clab-*/
 results/
 logs/
 
-basic_forwarding.json
-basic_forwarding.p4info.txtpb
+famtar_router.json
+famtar_router.p4info.txtpb

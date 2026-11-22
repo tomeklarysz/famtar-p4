@@ -1,0 +1,162 @@
+---
+- name: "Scenariusz 3b: Topologia rzeczywista nobel-eu (Frankfurt -> Paris, 4 ścieżki) - Benchmark UDP Pareto (Throughput + Packet Loss)"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars:
+    mode: "famtar"
+    scenario_id: "scenario3_nobel_pareto"
+    runs: 5
+    base_seed: 42
+    num_flows: 200
+    # Rozkład rozmiarów i czasów nadejścia przepływów identyczny ze Scenariuszem 2 (scenario2_symmetric_pareto.yml):
+    mean_size_mb: 0.65
+    pareto_shape: 1.35
+    mean_iat: 0.22
+    # Skalowanie proporcjonalne do pojemności pojedynczego łącza (5 Mbit/s zamiast 10 Mbit/s):
+    # 1 przepływ = 62.5 kB/s = 0.50 Mbit/s = 10% pojemności pojedynczego łącza (w Scenariuszu 2: 125 kB/s = 1.0 Mbit/s = 10% z 10 Mbit/s).
+    rate_kbs: 62.5
+    # Rozmiar datagramu 4000 B (poniżej MTU=9500 B łącz veth Containerlab oraz burst=16 kB w tc tbf)
+    # obniża natężenie pakietowe dla ~15.4 Mbit/s z ~1920 pps do ~480 pps, tj. poniżej programowego
+    # limitu CPU pojedynczej instancji BMv2 simple_switch_grpc (~1100 pps przy 11 węzłach).
+    pkt_size: 4000
+    max_duration: 60
+    win_start: 10
+    win_end: 45
+    target_ip: "10.0.2.1"
+    target_port: 5000
+    lab_prefix: "clab-p4-nobel-lab"
+    project_root: "{{ (playbook_dir ~ '/../..') | realpath }}"
+    configs_dir: "{{ project_root }}/configs/nobel"
+    results_dir: "{{ project_root }}/results/{{ scenario_id }}_{{ mode }}"
+
+  tasks:
+    - name: Wyświetlenie parametrów benchmarku
+      ansible.builtin.debug:
+        msg: >
+          Uruchamianie {{ scenario_id }} | Tryb: {{ mode | upper }} | Powtórzenia: {{ runs }} (seedy od {{ base_seed }}) |
+          Przepływy: {{ num_flows }} (Pareto mu={{ mean_size_mb }}M, shape={{ pareto_shape }}, IAT={{ mean_iat }}s, rate={{ rate_kbs }}kB/s) |
+          Katalog wyników: {{ results_dir }}
+
+    - name: Przygotowanie czystego katalogu na wyniki
+      ansible.builtin.shell: |
+        rm -rf "{{ results_dir }}/run_"* "{{ results_dir }}/summary.json"
+        mkdir -p "{{ results_dir }}"
+      changed_when: true
+
+    - name: Upewnienie się, że python3 i skrypty generatora są na węzłach h1 i h2
+      ansible.builtin.shell: |
+        docker exec {{ lab_prefix }}-h1 which python3 >/dev/null || docker exec {{ lab_prefix }}-h1 apk add --no-cache python3
+        docker exec {{ lab_prefix }}-h2 which python3 >/dev/null || docker exec {{ lab_prefix }}-h2 apk add --no-cache python3
+        docker cp {{ project_root }}/scripts/traffic_sender.py {{ lab_prefix }}-h1:/tmp/traffic_sender.py
+        docker cp {{ project_root }}/scripts/traffic_receiver.py {{ lab_prefix }}-h2:/tmp/traffic_receiver.py
+      changed_when: false
+
+    - name: "Wykonanie {{ runs }} serii pomiarowych UDP Pareto na nobel-eu (seedy {{ base_seed }}..{{ (base_seed | int) + (runs | int) - 1 }})"
+      ansible.builtin.shell: |
+        set -e
+        for run_idx in $(seq 1 {{ runs }}); do
+          SEED=$(( {{ base_seed }} + run_idx - 1 ))
+          RUN_DIR="{{ results_dir }}/run_${run_idx}"
+          mkdir -p "$RUN_DIR"
+          echo "=== [{{ scenario_id }}:{{ mode }}] Seria ${run_idx}/{{ runs }} (seed=${SEED}) ==="
+
+          # 1. Reset rejestrów P4 i przywrócenie domyślnych metryk IS-IS na 11 routerach
+          /usr/bin/python3 - << 'PYEOF'
+        import glob, subprocess, yaml
+
+        for path in sorted(glob.glob("{{ configs_dir }}/*/controller.yaml")):
+            with open(path) as f:
+                c = yaml.safe_load(f)
+            netns = c["netns"]
+            frr = c["frr_container"]
+            thrift = str(c.get("thrift_port", 9089 + int(c["device_id"])))
+
+            cmds = (
+                "register_reset MyIngress.reg_signature\n"
+                "register_reset MyIngress.reg_egress_port\n"
+                "register_reset MyIngress.reg_saved_ttl\n"
+                "register_reset MyIngress.reg_timestamp\n"
+                "counter_reset MyIngress.port_bytes_counter\n"
+            )
+            subprocess.run(
+                ["docker", "exec", "-i", netns, "simple_switch_CLI", "--thrift-port", thrift],
+                input=cmds, text=True, stdout=subprocess.DEVNULL, check=True,
+            )
+
+            vty_args = ["docker", "exec", frr, "vtysh", "-c", "conf t",
+                        "-c", "router isis FAMTAR", "-c", "lsp-gen-interval 1", "-c", "spf-interval 1"]
+            for ifname, metric in (c.get("default_metrics") or {}).items():
+                vty_args.extend(["-c", f"interface {ifname}", "-c", f"isis metric {metric}"])
+            subprocess.run(vty_args, stdout=subprocess.DEVNULL, check=True)
+        PYEOF
+
+          sleep 5
+
+          # 2. Czyszczenie starych procesów i start tcpdump na 4 łączach wychodzących z Frankfurtu
+          docker exec {{ lab_prefix }}-h1 pkill -f traffic_sender.py 2>/dev/null || true
+          docker exec {{ lab_prefix }}-h2 pkill -f traffic_receiver.py 2>/dev/null || true
+          docker exec {{ lab_prefix }}-fra-frr pkill -f tcpdump 2>/dev/null || true
+          docker exec {{ lab_prefix }}-fra-frr rm -f /tmp/tcpdump_p*.txt
+          docker exec {{ lab_prefix }}-h1 rm -f /tmp/sender_stats.json
+          docker exec {{ lab_prefix }}-h2 rm -f /tmp/receiver_stats.json
+
+          FILTER="udp and dst host {{ target_ip }} and dst port {{ target_port }}"
+          docker exec -d {{ lab_prefix }}-fra-frr sh -c "tcpdump -l -n -tt -i eth2 '$FILTER' > /tmp/tcpdump_p1.txt 2>&1"
+          docker exec -d {{ lab_prefix }}-fra-frr sh -c "tcpdump -l -n -tt -i eth5 '$FILTER' > /tmp/tcpdump_p2.txt 2>&1"
+          docker exec -d {{ lab_prefix }}-fra-frr sh -c "tcpdump -l -n -tt -i eth3 '$FILTER' > /tmp/tcpdump_p3.txt 2>&1"
+          docker exec -d {{ lab_prefix }}-fra-frr sh -c "tcpdump -l -n -tt -i eth4 '$FILTER' > /tmp/tcpdump_p4.txt 2>&1"
+
+          # 3. Start odbiornika na h2 i nadawcy na h1
+          docker exec -d {{ lab_prefix }}-h2 python3 /tmp/traffic_receiver.py \
+            --bind 0.0.0.0 \
+            --port {{ target_port }} \
+            --output /tmp/receiver_stats.json \
+            --max-duration {{ (max_duration | int) + 10 }} \
+            --idle-timeout 6.0 \
+            --win-start {{ win_start }} \
+            --win-end {{ win_end }}
+
+          sleep 1
+
+          docker exec {{ lab_prefix }}-h1 python3 /tmp/traffic_sender.py \
+            --target-ip {{ target_ip }} \
+            --target-port {{ target_port }} \
+            --num-flows {{ num_flows }} \
+            --rate-kbs {{ rate_kbs }} \
+            --pkt-size {{ pkt_size }} \
+            --mean-size-mb {{ mean_size_mb }} \
+            --pareto-shape {{ pareto_shape }} \
+            --mean-iat {{ mean_iat }} \
+            --seed "$SEED" \
+            --max-duration {{ max_duration }} \
+            --output /tmp/sender_stats.json
+
+          /usr/bin/python3 {{ project_root }}/scripts/fft_dump.py --topo nobel > "$RUN_DIR/fft_snapshot.txt" 2>&1 || true
+          sleep 1
+
+          # 4. Zatrzymanie procesów i pobranie wyników
+          docker exec {{ lab_prefix }}-fra-frr pkill -f tcpdump 2>/dev/null || true
+          docker exec {{ lab_prefix }}-h2 pkill -INT -f traffic_receiver.py 2>/dev/null || true
+          sleep 1
+          for p in p1 p2 p3 p4; do
+            docker cp {{ lab_prefix }}-fra-frr:/tmp/tcpdump_${p}.txt "$RUN_DIR/tcpdump_${p}.txt" || true
+          done
+          docker cp {{ lab_prefix }}-h1:/tmp/sender_stats.json "$RUN_DIR/sender_stats.json" || true
+          docker cp {{ lab_prefix }}-h2:/tmp/receiver_stats.json "$RUN_DIR/receiver_stats.json" || true
+
+          MPLCONFIGDIR=/tmp/matplotlib /usr/bin/python3 {{ project_root }}/ansible/scripts/analyze_and_plot.py \
+            --type pareto \
+            --scenario {{ scenario_id }} \
+            --mode {{ mode }} \
+            --dir "$RUN_DIR"
+        done
+      args:
+        executable: /bin/bash
+      register: analysis_out
+      changed_when: true
+
+    - name: Podsumowanie statystyczne benchmarku
+      ansible.builtin.debug:
+        msg: "{{ analysis_out.stdout_lines }}"

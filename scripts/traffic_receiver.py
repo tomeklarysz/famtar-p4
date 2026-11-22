@@ -21,12 +21,14 @@ HEADER_SIZE = struct.calcsize(HEADER_FORMAT)
 
 class TrafficReceiver:
     def __init__(self, bind_ip="0.0.0.0", port=5000, output_file="/tmp/receiver_stats.json",
-                 max_duration=None, idle_timeout=15.0):
+                 max_duration=None, idle_timeout=15.0, win_start=10, win_end=45):
         self.bind_ip = bind_ip
         self.port = port
         self.output_file = output_file
         self.max_duration = max_duration
         self.idle_timeout = idle_timeout
+        self.win_start = win_start
+        self.win_end = win_end
         self.running = True
 
         self.start_time = None
@@ -65,12 +67,15 @@ class TrafficReceiver:
         # Flow loss tracking
         lost_in_pkt = 0
         if flow_id not in self.flows:
+            if seq_no > 0:
+                lost_in_pkt = seq_no
+                self.total_lost += seq_no
             self.flows[flow_id] = {
                 "first_seq": seq_no,
                 "last_seq": seq_no,
                 "received_pkts": 1,
                 "received_bytes": pkt_len,
-                "lost_pkts": 0,
+                "lost_pkts": lost_in_pkt,
                 "first_time": now,
                 "last_time": now,
             }
@@ -137,7 +142,7 @@ class TrafficReceiver:
                     break
 
             try:
-                data, addr = sock.recvfrom(2048)
+                data, addr = sock.recvfrom(65535)
                 self.process_packet(data, now)
             except socket.timeout:
                 continue
@@ -172,19 +177,20 @@ class TrafficReceiver:
         loss_pct = round((self.total_lost / max(1, self.total_packets + self.total_lost)) * 100.0, 3)
         overall_mbps = round((self.total_bytes * 8.0) / (duration * 1e6), 3) if duration > 0 else 0.0
 
-        # Summarize window [20, 230] seconds if duration is sufficient
+        # Summarize evaluation window [win_start, win_end] seconds
         window_bytes = 0
         window_pkts = 0
         window_lost = 0
         window_secs = 0
         for entry in ts_list:
-            if 20 <= entry["sec"] <= 230:
+            if self.win_start <= entry["sec"] <= self.win_end:
                 window_bytes += entry["bytes"]
                 window_pkts += entry["pkts"]
                 window_lost += entry["lost"]
                 window_secs += 1
 
-        window_mbps = round((window_bytes * 8.0) / (max(1, window_secs) * 1e6), 3) if window_secs > 0 else 0.0
+        span_secs = max(1, (min(self.win_end, int(duration)) - self.win_start + 1)) if duration >= self.win_start else max(1, window_secs)
+        window_mbps = round((window_bytes * 8.0) / (span_secs * 1e6), 3) if window_bytes > 0 else 0.0
         window_loss_pct = round((window_lost / max(1, window_pkts + window_lost)) * 100.0, 3)
 
         out_data = {
@@ -196,6 +202,7 @@ class TrafficReceiver:
                 "loss_pct": loss_pct,
                 "duration_sec": round(duration, 2),
                 "overall_mbps": overall_mbps,
+                "win_bounds": [self.win_start, self.win_end],
                 "window_20_230": {
                     "active_secs": window_secs,
                     "total_bytes": window_bytes,
@@ -224,6 +231,8 @@ def main():
     parser.add_argument("--output", default="/tmp/receiver_stats.json", help="Path to output JSON")
     parser.add_argument("--max-duration", type=float, default=None, help="Maximum test duration in seconds")
     parser.add_argument("--idle-timeout", type=float, default=15.0, help="Idle timeout to terminate after traffic ends")
+    parser.add_argument("--win-start", type=int, default=10, help="Evaluation window start second (default: 10)")
+    parser.add_argument("--win-end", type=int, default=45, help="Evaluation window end second (default: 45)")
     args = parser.parse_args()
 
     receiver = TrafficReceiver(
@@ -231,7 +240,9 @@ def main():
         port=args.port,
         output_file=args.output,
         max_duration=args.max_duration,
-        idle_timeout=args.idle_timeout
+        idle_timeout=args.idle_timeout,
+        win_start=args.win_start,
+        win_end=args.win_end,
     )
     receiver.run()
 

@@ -1,5 +1,5 @@
 ---
-- name: "Scenariusz 3: Topologia realistyczna nobel-eu (Frankfurt -> Paris, 4 ścieżki rozłączne) - FAMTAR vs ECMP"
+- name: "Scenariusz 3a: Topologia rzeczywista nobel-eu (Frankfurt -> Paris, 4 ścieżki) - TCP (Throughput + FCT)"
   hosts: localhost
   connection: local
   gather_facts: false
@@ -7,8 +7,9 @@
   vars:
     mode: "famtar"
     scenario_id: "scenario3_nobel"
+    runs: 5
     flow_rate: "4.8M"
-    duration: 24
+    flow_bytes: "10M"
     stagger_sec: 4
     target_ip: "10.0.2.1"
     lab_prefix: "clab-p4-nobel-lab"
@@ -19,23 +20,40 @@
   tasks:
     - name: Wyświetlenie parametrów testu
       ansible.builtin.debug:
-        msg: "Uruchamianie {{ scenario_id }} | Tryb: {{ mode | upper }} | Katalog wyników: {{ results_dir }}"
+        msg: >
+          Uruchamianie {{ scenario_id }} | Tryb: {{ mode | upper }} | Powtórzenia: {{ runs }} |
+          4 przepływy TCP po {{ flow_bytes }} (limit {{ flow_rate }}, kaskada co {{ stagger_sec }}s) | Katalog: {{ results_dir }}
 
-    - name: Utworzenie katalogu na wyniki
-      ansible.builtin.file:
-        path: "{{ results_dir }}"
-        state: directory
-        mode: "0755"
-
-    - name: Czyszczenie rejestrów P4 (FFT oraz liczników) i przywrócenie domyślnych metryk IS-IS na 11 routerach
+    - name: Przygotowanie czystego katalogu na wyniki
       ansible.builtin.shell: |
-        /usr/bin/python3 - << 'PYEOF'
-        import glob, os, subprocess, yaml
+        rm -rf "{{ results_dir }}/run_"* "{{ results_dir }}/summary.json"
+        mkdir -p "{{ results_dir }}"
+      changed_when: true
+
+    - name: Upewnienie się, że serwery iperf3 (5201..5204) działają na h2
+      ansible.builtin.shell: |
+        docker exec {{ lab_prefix }}-h1 pkill -f iperf3 2>/dev/null || true
+        for p in 5201 5202 5203 5204; do
+          docker exec {{ lab_prefix }}-h2 pgrep -f "iperf3 -s -p $p" >/dev/null || \
+            docker exec {{ lab_prefix }}-h2 iperf3 -s -p $p -D
+        done
+      changed_when: false
+
+    - name: "Wykonanie {{ runs }} serii pomiarowych TCP na topologii nobel-eu (Throughput + FCT)"
+      ansible.builtin.shell: |
+        set -e
+        for run_idx in $(seq 1 {{ runs }}); do
+          RUN_DIR="{{ results_dir }}/run_${run_idx}"
+          mkdir -p "$RUN_DIR"
+          echo "=== [{{ scenario_id }}:{{ mode }}] Seria ${run_idx}/{{ runs }} ==="
+
+          # 1. Reset rejestrów P4 i przywrócenie domyślnych metryk IS-IS na 11 routerach
+          /usr/bin/python3 - << 'PYEOF'
+        import glob, subprocess, yaml
 
         for path in sorted(glob.glob("{{ configs_dir }}/*/controller.yaml")):
             with open(path) as f:
                 c = yaml.safe_load(f)
-            name = c["name"]
             netns = c["netns"]
             frr = c["frr_container"]
             thrift = str(c.get("thrift_port", 9089 + int(c["device_id"])))
@@ -56,85 +74,59 @@
                         "-c", "router isis FAMTAR", "-c", "lsp-gen-interval 1", "-c", "spf-interval 1"]
             for ifname, metric in (c.get("default_metrics") or {}).items():
                 vty_args.extend(["-c", f"interface {ifname}", "-c", f"isis metric {metric}"])
-            subprocess.run(vty_args, check=True)
+            subprocess.run(vty_args, stdout=subprocess.DEVNULL, check=True)
         PYEOF
-      args:
-        executable: /bin/bash
-      changed_when: true
 
-    - name: Odczekanie 5 s na zbieżność IS-IS w topologii nobel-eu i aktualizację tablic P4
-      ansible.builtin.pause:
-        seconds: 5
+          # Odczekanie na wygaszenie hold_down_s i zbieżność IS-IS na 11 węzłach
+          sleep 5
 
-    - name: Przygotowanie serwerów iperf3 na h2 i wyczyszczenie starych procesów tcpdump na fra
-      ansible.builtin.shell: |
-        docker exec {{ lab_prefix }}-h1 pkill -f iperf3 2>/dev/null || true
-        for p in 5201 5202 5203 5204; do
-          docker exec {{ lab_prefix }}-h2 pgrep -f "iperf3 -s -p $p" >/dev/null || \
-            docker exec {{ lab_prefix }}-h2 iperf3 -s -p $p -D
-        done
-        docker exec {{ lab_prefix }}-fra-frr pkill -f tcpdump 2>/dev/null || true
-        docker exec {{ lab_prefix }}-fra-frr rm -f /tmp/tcpdump_p*.txt
-      changed_when: false
+          # 2. Start tcpdump na 4 łączach wychodzących z Frankfurtu (P1=eth2, P2=eth5, P3=eth3, P4=eth4)
+          docker exec {{ lab_prefix }}-fra-frr pkill -f tcpdump 2>/dev/null || true
+          docker exec {{ lab_prefix }}-fra-frr rm -f /tmp/tcpdump_p*.txt
+          FILTER="tcp and dst host {{ target_ip }} and (dst port 5201 or dst port 5202 or dst port 5203 or dst port 5204)"
+          docker exec -d {{ lab_prefix }}-fra-frr sh -c "tcpdump -l -n -i eth2 '$FILTER' > /tmp/tcpdump_p1.txt 2>&1"
+          docker exec -d {{ lab_prefix }}-fra-frr sh -c "tcpdump -l -n -i eth5 '$FILTER' > /tmp/tcpdump_p2.txt 2>&1"
+          docker exec -d {{ lab_prefix }}-fra-frr sh -c "tcpdump -l -n -i eth3 '$FILTER' > /tmp/tcpdump_p3.txt 2>&1"
+          docker exec -d {{ lab_prefix }}-fra-frr sh -c "tcpdump -l -n -i eth4 '$FILTER' > /tmp/tcpdump_p4.txt 2>&1"
 
-    - name: Uruchomienie nasłuchu tcpdump na 4 łączach wychodzących z Frankfurtu (P1=eth2, P2=eth5, P3=eth3, P4=eth4)
-      ansible.builtin.shell: |
-        FILTER="tcp and dst host {{ target_ip }} and (dst port 5201 or dst port 5202 or dst port 5203 or dst port 5204)"
-        docker exec -d {{ lab_prefix }}-fra-frr sh -c "tcpdump -l -n -i eth2 '$FILTER' > /tmp/tcpdump_p1.txt 2>&1"
-        docker exec -d {{ lab_prefix }}-fra-frr sh -c "tcpdump -l -n -i eth5 '$FILTER' > /tmp/tcpdump_p2.txt 2>&1"
-        docker exec -d {{ lab_prefix }}-fra-frr sh -c "tcpdump -l -n -i eth3 '$FILTER' > /tmp/tcpdump_p3.txt 2>&1"
-        docker exec -d {{ lab_prefix }}-fra-frr sh -c "tcpdump -l -n -i eth4 '$FILTER' > /tmp/tcpdump_p4.txt 2>&1"
-      changed_when: false
+          # 3. Generowanie 4 kaskadowych przepływów TCP o stałej objętości (-n {{ flow_bytes }})
+          STAGGER={{ stagger_sec }}
+          PIDS=()
+          for idx in 0 1 2 3; do
+            PORT=$((5201 + idx))
+            FNUM=$((idx + 1))
+            docker exec {{ lab_prefix }}-h1 iperf3 -c {{ target_ip }} -p $PORT -b {{ flow_rate }} -n {{ flow_bytes }} -l 16K -i 1 --get-server-output --json > "$RUN_DIR/flow${FNUM}.json" &
+            PIDS+=($!)
+            if [ $idx -lt 3 ]; then
+              sleep $STAGGER
+            fi
+          done
 
-    - name: "Generowanie 4 przepływów kaskadowo co {{ stagger_sec }}s ({{ flow_rate }} każdy) + zrzut FFT"
-      ansible.builtin.shell: |
-        DUR={{ duration }}
-        STAGGER={{ stagger_sec }}
-        PIDS=()
+          sleep 3
+          /usr/bin/python3 {{ project_root }}/scripts/fft_dump.py --topo nobel > "$RUN_DIR/fft_snapshot.txt" 2>&1 || true
 
-        for idx in 0 1 2 3; do
-          PORT=$((5201 + idx))
-          FNUM=$((idx + 1))
-          FDUR=$((DUR - idx * STAGGER))
-          docker exec {{ lab_prefix }}-h1 iperf3 -c {{ target_ip }} -p $PORT -b {{ flow_rate }} -l 16K -t $FDUR -i 1 --get-server-output --json > {{ results_dir }}/flow${FNUM}.json &
-          PIDS+=($!)
-          if [ $idx -lt 3 ]; then
-            sleep $STAGGER
-          fi
-        done
+          for pid in "${PIDS[@]}"; do
+            wait "$pid" || true
+          done
 
-        sleep 3
-        /usr/bin/python3 {{ project_root }}/scripts/fft_dump.py --topo nobel > {{ results_dir }}/fft_snapshot.txt 2>&1 || true
+          # 4. Zatrzymanie tcpdump i analiza serii
+          docker exec {{ lab_prefix }}-fra-frr pkill -f tcpdump 2>/dev/null || true
+          for p in p1 p2 p3 p4; do
+            docker cp {{ lab_prefix }}-fra-frr:/tmp/tcpdump_${p}.txt "$RUN_DIR/tcpdump_${p}.txt" || true
+          done
 
-        for pid in "${PIDS[@]}"; do
-          wait "$pid" || true
+          MPLCONFIGDIR=/tmp/matplotlib /usr/bin/python3 {{ project_root }}/ansible/scripts/analyze_and_plot.py \
+            --type nobel \
+            --scenario {{ scenario_id }} \
+            --mode {{ mode }} \
+            --dir "$RUN_DIR" \
+            --stagger {{ stagger_sec }}
         done
       args:
         executable: /bin/bash
-      changed_when: true
-
-    - name: Zatrzymanie tcpdump na fra i pobranie zrzutów pakietów
-      ansible.builtin.shell: |
-        docker exec {{ lab_prefix }}-fra-frr pkill -f tcpdump 2>/dev/null || true
-        for p in p1 p2 p3 p4; do
-          docker cp {{ lab_prefix }}-fra-frr:/tmp/tcpdump_${p}.txt {{ results_dir }}/tcpdump_${p}.txt || true
-        done
-      changed_when: false
-
-    - name: Analiza wyników i generowanie wykresów PNG
-      ansible.builtin.command: >
-        /usr/bin/python3 {{ project_root }}/ansible/scripts/analyze_and_plot.py
-        --type nobel
-        --scenario {{ scenario_id }}
-        --mode {{ mode }}
-        --dir {{ results_dir }}
-        --stagger {{ stagger_sec }}
-        --duration {{ duration }}
-      environment:
-        MPLCONFIGDIR: "/tmp/matplotlib"
       register: analysis_out
-      changed_when: false
+      changed_when: true
 
-    - name: Podsumowanie pomiaru
+    - name: Podsumowanie statystyczne pomiaru
       ansible.builtin.debug:
         msg: "{{ analysis_out.stdout_lines }}"

@@ -2,8 +2,13 @@
 set -e
 
 ACTION="${1:-}"
-MODE="${2:-famtar}"
-TARGET="${3:-${TOPO:-configs}}"
+if [ "${2:-}" = "nobel" ] || [ "${2:-}" = "configs" ] || [ -d "${2:-}" ]; then
+  MODE="famtar"
+  TARGET="$2"
+else
+  MODE="${2:-famtar}"
+  TARGET="${3:-${TOPO:-configs}}"
+fi
 if [ "$TARGET" != "configs" ] && [ -d "configs/$TARGET" ]; then
   CONFIG_DIR="configs/$TARGET"
 else

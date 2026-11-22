@@ -7,8 +7,8 @@ import yaml
 from pyroute2 import NetNS
 import p4runtime_sh.shell as sh
 
-P4INFO_PATH = "basic_forwarding.p4info.txtpb"
-BIN_PATH = "basic_forwarding.json"
+P4INFO_PATH = "famtar_router.p4info.txtpb"
+BIN_PATH = "famtar_router.json"
 ELECTION_ID = (0, 1)
 
 
