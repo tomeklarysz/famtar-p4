@@ -26,8 +26,8 @@ DEFAULT_TC_RATE = "5mbit"
 DEFAULT_TC_BURST = "16kb"
 DEFAULT_TC_LATENCY = "50ms"
 
-SRC_NAME = "Frankfurt"
-DST_NAME = "Paris"
+SRC_NAME = "Paris"
+DST_NAME = "Frankfurt"
 
 # Short 3-letter slugs for clean Linux/Docker/Containerlab naming
 NODE_SLUGS = {

@@ -397,7 +397,8 @@ def handle_throughput(args):
         mfct_m, mfct_s = mean_std([r.get("mean_fct_sec") for r in runs])
         mk_m, mk_s = mean_std([r.get("makespan_sec") for r in runs])
 
-        rep = dict(runs[0])
+        rep_idx = max(0, min(len(runs) - 1, getattr(args, "rep_run", 1) - 1))
+        rep = dict(runs[rep_idx])
         rep["stats"] = {
             "n_runs": len(runs),
             "f1_mbps_mean": f1_m, "f1_mbps_std": f1_s,
@@ -498,10 +499,10 @@ def handle_qos(args):
 
 
 NOBEL_PATHS = [
-    ("p1", "P1: fra-bru-par (56)", "#4c72b0"),
-    ("p2", "P2: fra-str-par (59)", "#55a868"),
-    ("p3", "P3: fra-ham-ams-lon-par (145)", "#dd8452"),
-    ("p4", "P4: fra-mun-mil-zur-lyo-par (162)", "#8172b3"),
+    ("p1", "P1: par-bru-fra (56)", "#4c72b0"),
+    ("p2", "P2: par-str-fra (59)", "#55a868"),
+    ("p3", "P3: par-lon-ams-ham-fra (145)", "#dd8452"),
+    ("p4", "P4: par-lyo-zur-mil-mun-fra (162)", "#8172b3"),
 ]
 NOBEL_PORTS = [5201, 5202, 5203, 5204]
 
@@ -788,7 +789,8 @@ def handle_nobel(args):
         stats["makespan_sec_mean"] = mk_m
         stats["makespan_sec_std"] = mk_s
 
-        rep = dict(runs[0])
+        rep_idx = max(0, min(len(runs) - 1, getattr(args, "rep_run", 1) - 1))
+        rep = dict(runs[rep_idx])
         rep["stats"] = stats
         with open(os.path.join(mode_root, "summary.json"), "w") as f:
             json.dump(rep, f, indent=2)
@@ -948,7 +950,8 @@ def handle_pareto(args):
         ov_mbps_m, ov_mbps_s = mean_std([r.get("overall_mbps") for r in runs])
         ov_loss_m, ov_loss_s = mean_std([r.get("loss_pct") for r in runs])
 
-        rep = dict(runs[0])
+        rep_idx = max(0, min(len(runs) - 1, getattr(args, "rep_run", 1) - 1))
+        rep = dict(runs[rep_idx])
         rep["stats"] = {
             "n_runs": len(runs),
             "win_mbps_mean": win_mbps_m, "win_mbps_std": win_mbps_s,
@@ -1094,6 +1097,7 @@ def main():
     parser.add_argument("--stagger", type=int, default=2)
     parser.add_argument("--duration", type=int, default=16)
     parser.add_argument("--elephant-duration", type=int, default=10)
+    parser.add_argument("--rep-run", type=int, default=1, help="1-based run index used as representative timeseries")
     args = parser.parse_args()
 
     if args.type == "throughput":

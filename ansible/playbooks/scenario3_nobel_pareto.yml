@@ -1,5 +1,5 @@
 ---
-- name: "Scenariusz 3b: Topologia rzeczywista nobel-eu (Frankfurt -> Paris, 4 ścieżki) - Benchmark UDP Pareto (Throughput + Packet Loss)"
+- name: "Scenariusz 3b: Topologia rzeczywista nobel-eu (Paris -> Frankfurt, 4 ścieżki) - Benchmark UDP Pareto (Throughput + Packet Loss)"
   hosts: localhost
   connection: local
   gather_facts: false
@@ -94,19 +94,19 @@
 
           sleep 5
 
-          # 2. Czyszczenie starych procesów i start tcpdump na 4 łączach wychodzących z Frankfurtu
+          # 2. Czyszczenie starych procesów i start tcpdump na 4 łączach wychodzących z Paryża
           docker exec {{ lab_prefix }}-h1 pkill -f traffic_sender.py 2>/dev/null || true
           docker exec {{ lab_prefix }}-h2 pkill -f traffic_receiver.py 2>/dev/null || true
-          docker exec {{ lab_prefix }}-fra-frr pkill -f tcpdump 2>/dev/null || true
-          docker exec {{ lab_prefix }}-fra-frr rm -f /tmp/tcpdump_p*.txt
+          docker exec {{ lab_prefix }}-par-frr pkill -f tcpdump 2>/dev/null || true
+          docker exec {{ lab_prefix }}-par-frr rm -f /tmp/tcpdump_p*.txt
           docker exec {{ lab_prefix }}-h1 rm -f /tmp/sender_stats.json
           docker exec {{ lab_prefix }}-h2 rm -f /tmp/receiver_stats.json
 
           FILTER="udp and dst host {{ target_ip }} and dst port {{ target_port }}"
-          docker exec -d {{ lab_prefix }}-fra-frr sh -c "tcpdump -l -n -tt -i eth2 '$FILTER' > /tmp/tcpdump_p1.txt 2>&1"
-          docker exec -d {{ lab_prefix }}-fra-frr sh -c "tcpdump -l -n -tt -i eth5 '$FILTER' > /tmp/tcpdump_p2.txt 2>&1"
-          docker exec -d {{ lab_prefix }}-fra-frr sh -c "tcpdump -l -n -tt -i eth3 '$FILTER' > /tmp/tcpdump_p3.txt 2>&1"
-          docker exec -d {{ lab_prefix }}-fra-frr sh -c "tcpdump -l -n -tt -i eth4 '$FILTER' > /tmp/tcpdump_p4.txt 2>&1"
+          docker exec -d {{ lab_prefix }}-par-frr sh -c "tcpdump -l -n -tt -i eth2 '$FILTER' > /tmp/tcpdump_p1.txt 2>&1"
+          docker exec -d {{ lab_prefix }}-par-frr sh -c "tcpdump -l -n -tt -i eth5 '$FILTER' > /tmp/tcpdump_p2.txt 2>&1"
+          docker exec -d {{ lab_prefix }}-par-frr sh -c "tcpdump -l -n -tt -i eth3 '$FILTER' > /tmp/tcpdump_p3.txt 2>&1"
+          docker exec -d {{ lab_prefix }}-par-frr sh -c "tcpdump -l -n -tt -i eth4 '$FILTER' > /tmp/tcpdump_p4.txt 2>&1"
 
           # 3. Start odbiornika na h2 i nadawcy na h1
           docker exec -d {{ lab_prefix }}-h2 python3 /tmp/traffic_receiver.py \
@@ -137,11 +137,11 @@
           sleep 1
 
           # 4. Zatrzymanie procesów i pobranie wyników
-          docker exec {{ lab_prefix }}-fra-frr pkill -f tcpdump 2>/dev/null || true
+          docker exec {{ lab_prefix }}-par-frr pkill -f tcpdump 2>/dev/null || true
           docker exec {{ lab_prefix }}-h2 pkill -INT -f traffic_receiver.py 2>/dev/null || true
           sleep 1
           for p in p1 p2 p3 p4; do
-            docker cp {{ lab_prefix }}-fra-frr:/tmp/tcpdump_${p}.txt "$RUN_DIR/tcpdump_${p}.txt" || true
+            docker cp {{ lab_prefix }}-par-frr:/tmp/tcpdump_${p}.txt "$RUN_DIR/tcpdump_${p}.txt" || true
           done
           docker cp {{ lab_prefix }}-h1:/tmp/sender_stats.json "$RUN_DIR/sender_stats.json" || true
           docker cp {{ lab_prefix }}-h2:/tmp/receiver_stats.json "$RUN_DIR/receiver_stats.json" || true
