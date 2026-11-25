@@ -14,7 +14,7 @@
     pareto_shape: 1.35
     mean_iat: 0.22
     rate_kbs: 125.0
-    pkt_size: 1000
+    pkt_size: 4000
     max_duration: 60
     win_start: 10
     win_end: 45
@@ -113,8 +113,8 @@
             --max-duration {{ max_duration }} \
             --output /tmp/sender_stats.json
 
-          sleep 2
           /usr/bin/python3 {{ project_root }}/scripts/fft_dump.py > "$RUN_DIR/fft_snapshot.txt" 2>&1 || true
+          sleep 1
 
           # 5. Zatrzymanie procesów i pobranie wyników
           docker exec clab-p4-basic-lab-r2-frr pkill -f tcpdump 2>/dev/null || true
