@@ -54,7 +54,7 @@ class P4Router:
             print(f"[{self.name}] dmac: port {port} -> dst {dst_mac}, src {src_mac}", flush=True)
 
         for port in self.port_map.values():
-            member = sh.ActionProfileMember("FamtarIngress.ecmp_selector")(member_id=port, action="FamtarIngress.set_nhop")
+            member = sh.ActionProfileMember("FamtarIngress.ecmp_selector")(member_id=port, action="FamtarIngress.set_port")
             member.action["port"] = str(port)
             try:
                 member.insert()

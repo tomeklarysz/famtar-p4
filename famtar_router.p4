@@ -127,7 +127,7 @@ control FamtarIngress(inout headers hdr,
         mark_to_drop(standard_metadata);
     }
 
-    action set_nhop(bit<9> port) {
+    action set_port(bit<9> port) {
         standard_metadata.egress_spec = port;
     }
 
@@ -148,7 +148,7 @@ control FamtarIngress(inout headers hdr,
             meta.l4_dst_port:  selector;
         }
         actions = {
-            set_nhop;
+            set_port;
             drop;
         }
         implementation = ecmp_selector;
